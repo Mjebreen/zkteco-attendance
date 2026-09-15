@@ -1,0 +1,20 @@
+# Caddy reverse proxy with automatic HTTPS (Let's Encrypt).
+# Replace attendance.example.com; DNS must already point at this host (ports 80/443 open).
+#
+#   docker run -d --name caddy --network host -v $PWD/deploy/Caddyfile:/etc/caddy/Caddyfile \
+#     -v caddy_data:/data caddy:2
+
+attendance.example.com {
+    encode gzip
+
+    # The app already enforces Basic Auth on / and /print and an API key elsewhere.
+    reverse_proxy 127.0.0.1:5000 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Real-IP {remote_host}
+    }
+
+    # PDF generation for a long range can take a few seconds.
+    request_body {
+        max_size 20MB
+    }
+}

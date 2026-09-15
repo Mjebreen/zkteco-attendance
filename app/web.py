@@ -1,0 +1,512 @@
+"""Server-rendered web UI (Jinja2, no framework): dashboard, print view, employee profile,
+settings (departments + employee assignment), CSV export, manual sync.
+
+Everything here sits behind HTTP Basic Auth (DASHBOARD_USER / DASHBOARD_PASSWORD).
+"""
+
+from __future__ import annotations
+
+import csv
+import io
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlencode
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.orm import Session
+
+from app import i18n, rules, service
+from app.auth import require_dashboard_auth
+from app.config import Settings, get_settings
+from app.dates import resolve_range, today
+from app.db import get_db
+from app.sync_trigger import trigger_sync
+
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+router = APIRouter(dependencies=[Depends(require_dashboard_auth)])
+
+LANG_COOKIE = "lang"
+
+
+# --------------------------------------------------------------------------- #
+# Template helpers
+# --------------------------------------------------------------------------- #
+
+
+def _fmt_hours(v: float | None) -> str:
+    return f"{v:.2f}" if v else "—"
+
+
+def _fmt_time(dt: datetime | None) -> str:
+    return dt.strftime("%H:%M:%S") if dt else "—"
+
+
+def _fmt_hm(dt: datetime | None) -> str:
+    return dt.strftime("%H:%M") if dt else "—"
+
+
+def _pct(rate: float) -> int:
+    return int(rate * 100)
+
+
+templates.env.filters["hours"] = _fmt_hours
+templates.env.filters["hhmmss"] = _fmt_time
+templates.env.filters["hhmm"] = _fmt_hm
+templates.env.filters["pct"] = _pct
+
+
+def _lang(request: Request, settings: Settings) -> str:
+    return i18n.resolve_lang(
+        request.query_params.get("lang"),
+        request.cookies.get(LANG_COOKIE),
+        request.headers.get("accept-language"),
+        settings.default_lang,
+    )
+
+
+def _url_with(request: Request, **changes: Any) -> str:
+    params = dict(request.query_params)
+    for k, v in changes.items():
+        if v is None or v == "":
+            params.pop(k, None)
+        else:
+            params[k] = str(v)
+    qs = urlencode(params)
+    return request.url.path + ("?" + qs if qs else "")
+
+
+def _render(request: Request, template: str, ctx: dict[str, Any], status_code: int = 200):
+    lang = ctx["lang"]
+    resp = templates.TemplateResponse(request, template, ctx, status_code=status_code)
+    if request.query_params.get("lang"):
+        resp.set_cookie(LANG_COOKIE, lang, max_age=365 * 24 * 3600, samesite="lax")
+    return resp
+
+
+def _sync_info(db: Session, settings: Settings) -> dict[str, Any]:
+    state = service.get_sync_state(db, create=False)
+    last = state.last_sync if state else None
+    minutes = int((datetime.now() - last).total_seconds() // 60) if last else None
+    stale = minutes is None or minutes > settings.poll_interval_minutes * 3
+    return {
+        "last_sync": last,
+        "last_sync_minutes": minutes,
+        "last_error": state.last_error if state else None,
+        "sync_stale": stale,
+    }
+
+
+def _shift_label(settings: Settings, lang: str) -> str:
+    h = settings.day_start_hour
+    if not h:
+        return ""
+    return f"{i18n.t(lang, 'shift_window')}: {h:02d}:00 → {i18n.t(lang, 'next_day')} {(h - 1) % 24:02d}:59"
+
+
+def _dept_id(request: Request) -> int | None:
+    raw = request.query_params.get("department")
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _base_context(request: Request, db: Session, settings: Settings, page: str) -> dict[str, Any]:
+    lang = _lang(request, settings)
+    other = "ar" if lang == "en" else "en"
+    departments = service.list_departments(db)
+    dept_id = _dept_id(request)
+    dept = next((d for d in departments if d.id == dept_id), None)
+    return {
+        "request": request,
+        "page": page,
+        "lang": lang,
+        "rtl": i18n.is_rtl(lang),
+        "t": lambda key, **kw: i18n.t(lang, key, **kw),
+        "fmt_date": lambda d, style="long": i18n.fmt_date(d, lang, style),
+        "lang_switch_url": _url_with(request, lang=other),
+        "url_with": lambda **kw: _url_with(request, **kw),
+        "company": settings.company_name,
+        "device": settings.device_label,
+        "shift_label": _shift_label(settings, lang),
+        "target_hours": settings.target_hours,
+        "late_after": settings.late_after,
+        "early_before": settings.early_before,
+        "late_early_turn": settings.late_early_turn,
+        "poll_interval": settings.poll_interval_minutes,
+        "now": datetime.now(),
+        "departments": departments,
+        "department_id": dept.id if dept else None,
+        "department_name": dept.name if dept else None,
+        "msg": request.query_params.get("msg"),
+        "synced": request.query_params.get("synced"),
+        "sync_error": request.query_params.get("sync_error"),
+        **_sync_info(db, settings),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Row decoration (live status, target progress, late badge)
+# --------------------------------------------------------------------------- #
+
+
+def _flag(e: rules.EmployeeDay, settings: Settings) -> str | None:
+    """'late' / 'early' / None for the first punch (see rules.checkin_flag)."""
+    return rules.checkin_flag(e.first_in, settings.late_after, settings.early_before, settings.late_early_turn)
+
+
+def _decorate_day_rows(rep: rules.DailyReport, settings: Settings, live: bool, now: datetime) -> list[dict[str, Any]]:
+    rows = []
+    for e in rep.present:
+        hours = rules.live_hours(e, now) if live else e.hours_worked
+        open_session = live and e.last_out is None
+        rows.append(
+            {
+                "e": e,
+                "hours": hours,
+                "progress": rules.target_progress(hours, settings.target_hours),
+                "met": hours >= settings.target_hours > 0,
+                "open": open_session,
+                "flag": _flag(e, settings),
+                "search": f"{e.name} {e.user_id} {e.department or ''}".lower(),
+            }
+        )
+    return rows
+
+
+def _dept_breakdown_day(rep: rules.DailyReport, rows: list[dict[str, Any]], no_dept_label: str) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    open_by_id = {r["e"].user_id for r in rows if r["open"]}
+    for e in rep.employees:
+        key = e.department or no_dept_label
+        g = groups.setdefault(key, {"name": key, "total": 0, "present": 0, "absent": 0, "hours": 0.0, "open": 0})
+        g["total"] += 1
+        if e.attended:
+            g["present"] += 1
+            g["hours"] += e.hours_worked
+            if e.user_id in open_by_id:
+                g["open"] += 1
+        else:
+            g["absent"] += 1
+    out = sorted(groups.values(), key=lambda g: (g["name"] == no_dept_label, g["name"].lower()))
+    for g in out:
+        g["rate"] = g["present"] / g["total"] if g["total"] else 0
+    return out
+
+
+def _dept_breakdown_range(rep: rules.RangeReport, no_dept_label: str) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    for e in rep.employees:
+        key = e.department or no_dept_label
+        g = groups.setdefault(key, {"name": key, "employees": 0, "present_days": 0, "hours": 0.0})
+        g["employees"] += 1
+        g["present_days"] += e.days_present
+        g["hours"] += e.total_hours
+    out = sorted(groups.values(), key=lambda g: (g["name"] == no_dept_label, g["name"].lower()))
+    for g in out:
+        possible = g["employees"] * rep.days_total
+        g["rate"] = g["present_days"] / possible if possible else 0
+        g["avg_present"] = g["present_days"] / rep.days_total if rep.days_total else 0
+    return out
+
+
+def _presence_per_day(rep: rules.RangeReport) -> list[dict[str, Any]]:
+    counts: dict[date, int] = {}
+    for e in rep.employees:
+        for d, day in e.per_day.items():
+            if day.attended:
+                counts[d] = counts.get(d, 0) + 1
+    total = len(rep.employees) or 1
+    out = []
+    d = rep.from_date
+    while d <= rep.to_date:
+        n = counts.get(d, 0)
+        out.append({"date": d, "count": n, "pct": int(n / total * 100)})
+        d += timedelta(days=1)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Dashboard / print
+# --------------------------------------------------------------------------- #
+
+
+def _report_context(request: Request, db: Session, settings: Settings, page: str) -> dict[str, Any]:
+    ctx = _base_context(request, db, settings, page)
+    q = request.query_params
+    from_date, to_date = resolve_range(q.get("date"), q.get("from"), q.get("to"), q.get("range"))
+    is_range = from_date != to_date
+    lang, t = ctx["lang"], ctx["t"]
+    now = ctx["now"]
+    ctx.update(
+        from_date=from_date.isoformat(),
+        to_date=to_date.isoformat(),
+        is_range=is_range,
+        today=today().isoformat(),
+        auto_print=q.get("auto") == "1",
+        month_start=today().replace(day=1).isoformat(),
+    )
+    dept_id = ctx["department_id"]
+    if is_range:
+        rep = service.build_range(db, from_date, to_date, settings.day_start_hour, dept_id)
+        h = settings.day_start_hour
+        if h:
+            each = t("shift_days_each", a=f"{h:02d}:00", b=f"{(h - 1) % 24:02d}:59")
+        else:
+            each = t("days")
+        ctx.update(
+            window_label=f"{i18n.fmt_date(from_date, lang, 'short')} → {i18n.fmt_date(to_date, lang, 'long')} · {rep.days_total} {each}",
+            from_pretty=i18n.fmt_date(from_date, lang, "medium"),
+            to_pretty=i18n.fmt_date(to_date, lang, "medium"),
+            days_total=rep.days_total,
+            total=len(rep.employees),
+            avg_present=f"{rep.avg_present_per_day:.1f}",
+            total_hours=f"{rep.total_hours:.1f}",
+            range_list=rep.employees,
+            range_rows=[
+                {"e": e, "search": f"{e.name} {e.user_id} {e.department or ''}".lower(),
+                 "met": e.days_present > 0 and e.avg_hours_per_attended_day >= settings.target_hours > 0}
+                for e in rep.employees
+            ],
+            dept_breakdown=_dept_breakdown_range(rep, t("no_department")),
+            presence=_presence_per_day(rep),
+            live=False,
+        )
+    else:
+        rep = service.build_daily(db, from_date, settings.day_start_hour, dept_id)
+        live = rules.is_live_day(from_date, settings.day_start_hour, now)
+        rows = _decorate_day_rows(rep, settings, live, now)
+        h = settings.day_start_hour
+        label = i18n.fmt_date(from_date, lang, "long")
+        if h:
+            label += f" · {h:02d}:00 → {t('next_day')} {(h - 1) % 24:02d}:59"
+        ctx.update(
+            window_label=label,
+            from_pretty=i18n.fmt_date(from_date, lang, "long"),
+            to_pretty=i18n.fmt_date(to_date, lang, "long"),
+            days_total=1,
+            total=len(rep.employees),
+            present=len(rep.present),
+            absent=len(rep.absent),
+            currently_in=sum(1 for r in rows if r["open"]),
+            late_count=sum(1 for r in rows if r["flag"] == "late"),
+            early_count=sum(1 for r in rows if r["flag"] == "early"),
+            total_hours=f"{rep.total_hours:.1f}",
+            present_list=rep.present,
+            absent_list=rep.absent,
+            present_rows=rows,
+            absent_rows=[{"e": e, "search": f"{e.name} {e.user_id} {e.department or ''}".lower()} for e in rep.absent],
+            dept_breakdown=_dept_breakdown_day(rep, rows, t("no_department")),
+            live=live,
+        )
+    return ctx
+
+
+@router.get("/", response_class=HTMLResponse)
+def dashboard(request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    return _render(request, "dashboard.html", _report_context(request, db, settings, "dashboard"))
+
+
+@router.get("/print", response_class=HTMLResponse)
+def print_view(request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    return _render(request, "print.html", _report_context(request, db, settings, "print"))
+
+
+# --------------------------------------------------------------------------- #
+# CSV export
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/export.csv")
+def export_csv(request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    q = request.query_params
+    from_date, to_date = resolve_range(q.get("date"), q.get("from"), q.get("to"), q.get("range"))
+    dept_id = _dept_id(request)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    if from_date == to_date:
+        rep = service.build_daily(db, from_date, settings.day_start_hour, dept_id)
+        w.writerow(["date", "employee", "id", "department", "attended", "first_in", "last_out", "hours", "punches", "checkin"])
+        for e in rep.employees:
+            w.writerow([
+                from_date.isoformat(), e.name, e.user_id, e.department or "", "yes" if e.attended else "no",
+                e.first_in.isoformat(timespec="seconds") if e.first_in else "",
+                e.last_out.isoformat(timespec="seconds") if e.last_out else "",
+                f"{e.hours_worked:.2f}", e.punches, _flag(e, settings) or "",
+            ])
+        filename = f"attendance_{from_date:%Y-%m-%d}.csv"
+    else:
+        rep = service.build_range(db, from_date, to_date, settings.day_start_hour, dept_id)
+        w.writerow(["from", "to", "employee", "id", "department", "days_present", "days_total", "days_absent",
+                    "attendance_rate", "total_hours", "avg_hours_per_attended_day"])
+        for e in rep.employees:
+            w.writerow([
+                from_date.isoformat(), to_date.isoformat(), e.name, e.user_id, e.department or "",
+                e.days_present, e.days_total, e.days_absent, f"{e.attendance_rate:.4f}",
+                f"{e.total_hours:.2f}", f"{e.avg_hours_per_attended_day:.2f}",
+            ])
+        filename = f"attendance_{from_date:%Y-%m-%d}_to_{to_date:%Y-%m-%d}.csv"
+    data = "﻿" + buf.getvalue()  # BOM so Excel opens UTF-8 (Arabic names) correctly
+    return Response(
+        content=data,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Employee profile
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/employee/{user_id}", response_class=HTMLResponse)
+def employee_profile(
+    user_id: str, request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)
+):
+    ctx = _base_context(request, db, settings, "employee")
+    emp = service.get_employee(db, user_id)
+    if emp is None:
+        ctx.update(employee=None)
+        return _render(request, "employee.html", ctx, status_code=404)
+    q = request.query_params
+    if q.get("from") or q.get("to") or q.get("range") or q.get("date"):
+        from_date, to_date = resolve_range(q.get("date"), q.get("from"), q.get("to"), q.get("range"))
+    else:
+        to_date = today()
+        from_date = to_date - timedelta(days=29)
+    days = service.build_employee_history(db, emp, from_date, to_date, settings.day_start_hour)
+    now = ctx["now"]
+    rows = []
+    for d, day in zip(_daterange(from_date, to_date), days):
+        live = rules.is_live_day(d, settings.day_start_hour, now)
+        hours = rules.live_hours(day, now) if live else day.hours_worked
+        rows.append(
+            {
+                "date": d,
+                "e": day,
+                "hours": hours,
+                "progress": rules.target_progress(hours, settings.target_hours),
+                "met": hours >= settings.target_hours > 0,
+                "open": live and day.attended and day.last_out is None,
+                "live": live,
+                "flag": _flag(day, settings),
+            }
+        )
+    present_days = sum(1 for r in rows if r["e"].attended)
+    total_hours = sum(r["e"].hours_worked for r in rows)
+    ctx.update(
+        employee=emp,
+        from_date=from_date.isoformat(),
+        to_date=to_date.isoformat(),
+        rows=list(reversed(rows)),  # newest first
+        days_total=len(rows),
+        days_present=present_days,
+        days_absent=len(rows) - present_days,
+        rate=present_days / len(rows) if rows else 0,
+        total_hours=total_hours,
+        avg_hours=total_hours / present_days if present_days else 0,
+        target_met_days=sum(1 for r in rows if r["met"] and not r["open"]),
+    )
+    return _render(request, "employee.html", ctx)
+
+
+def _daterange(a: date, b: date):
+    d = a
+    while d <= b:
+        yield d
+        d += timedelta(days=1)
+
+
+# --------------------------------------------------------------------------- #
+# Settings: departments + employee assignment
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    ctx = _base_context(request, db, settings, "settings")
+    show_inactive = request.query_params.get("show_inactive") == "1"
+    ctx.update(
+        users=service.list_users_admin(db, include_inactive=show_inactive),
+        member_counts=service.department_member_counts(db),
+        show_inactive=show_inactive,
+    )
+    return _render(request, "settings.html", ctx)
+
+
+def _settings_redirect(request: Request, msg: str) -> RedirectResponse:
+    params = {"msg": msg}
+    if request.query_params.get("show_inactive") == "1":
+        params["show_inactive"] = "1"
+    return RedirectResponse(url="/settings?" + urlencode(params), status_code=303)
+
+
+@router.post("/settings/departments")
+def add_department(request: Request, name: str = Form(""), db: Session = Depends(get_db)):
+    try:
+        service.create_department(db, name)
+    except service.ValidationError as exc:
+        return _settings_redirect(request, f"err:{exc}")
+    return _settings_redirect(request, "saved")
+
+
+@router.post("/settings/departments/{dept_id}")
+def edit_department(
+    dept_id: int, request: Request, action: str = Form("rename"), name: str = Form(""), db: Session = Depends(get_db)
+):
+    if action == "delete":
+        service.delete_department(db, dept_id)
+        return _settings_redirect(request, "deleted")
+    try:
+        if service.rename_department(db, dept_id, name) is None:
+            raise HTTPException(404, "department not found")
+    except service.ValidationError as exc:
+        return _settings_redirect(request, f"err:{exc}")
+    return _settings_redirect(request, "saved")
+
+
+@router.post("/settings/employees/{user_id}")
+def edit_employee(
+    user_id: str,
+    request: Request,
+    display_name: str = Form(""),
+    department_id: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    dept = int(department_id) if department_id.strip().isdigit() else None
+    if service.update_user_settings(db, user_id, display_name, dept) is None:
+        raise HTTPException(404, "employee not found")
+    return _settings_redirect(request, "saved")
+
+
+# --------------------------------------------------------------------------- #
+# Manual sync
+# --------------------------------------------------------------------------- #
+
+
+@router.post("/sync")
+async def sync_from_dashboard(request: Request, settings: Settings = Depends(get_settings)):
+    """"Sync now" button: run/queue a collector pull. JSON for fetch(), redirect for plain forms."""
+    form = await request.form()
+    result = await run_in_threadpool(trigger_sync, settings, True)
+    wants_json = "application/json" in request.headers.get("accept", "") or form.get("format") == "json"
+    if wants_json:
+        return JSONResponse(result, status_code=200 if result.get("ok") else 502)
+    params: dict[str, str] = {}
+    for key in ("from", "to", "date", "range", "department"):
+        value = form.get(key)
+        if value:
+            params[key] = str(value)
+    if result.get("ok"):
+        params["synced"] = result.get("mode", "1")
+    else:
+        params["sync_error"] = str(result.get("error", "sync failed"))[:200]
+    return RedirectResponse(url="/?" + urlencode(params), status_code=303)

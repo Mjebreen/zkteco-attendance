@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}{{ t('settings') }} — {{ company }}{% endblock %}
+{% block content %}
+<div class="pagehead">
+  <div>
+    <h1>{{ t('settings') }}</h1>
+    <div class="sub">{{ t('departments') }} · {{ t('employees') }}</div>
+  </div>
+  <div class="actions"><a class="btn ghost" href="/">← {{ t('back_dashboard') }}</a></div>
+</div>
+
+{% if msg == 'saved' %}<div class="notice ok">{{ t('saved') }}</div>
+{% elif msg == 'deleted' %}<div class="notice ok">{{ t('deleted') }}</div>
+{% elif msg and msg.startswith('err:') %}<div class="notice bad">{{ t('error') }}: {{ t(msg[4:]) }}</div>{% endif %}
+
+<section class="box">
+  <h2>{{ t('departments') }} <span class="pill">{{ departments|length }}</span></h2>
+  <form class="form-inline" method="post" action="/settings/departments{% if show_inactive %}?show_inactive=1{% endif %}" style="margin-bottom:14px">
+    <input type="text" name="name" placeholder="{{ t('department_name') }}" required maxlength="120">
+    <button class="btn" type="submit">+ {{ t('add_department') }}</button>
+  </form>
+  {% if departments %}
+  <div class="tbl"><table>
+    <thead><tr><th>{{ t('department') }}</th><th class="num">{{ t('members') }}</th><th></th></tr></thead>
+    <tbody>
+    {% for d in departments %}
+      <tr>
+        <td>
+          <form class="form-inline" method="post" action="/settings/departments/{{ d.id }}{% if show_inactive %}?show_inactive=1{% endif %}">
+            <input type="hidden" name="action" value="rename">
+            <input type="text" name="name" value="{{ d.name }}" required maxlength="120">
+            <button class="btn ghost sm" type="submit">{{ t('rename') }}</button>
+          </form>
+        </td>
+        <td class="num">{{ member_counts.get(d.id, 0) }}</td>
+        <td class="num">
+          <form method="post" action="/settings/departments/{{ d.id }}{% if show_inactive %}?show_inactive=1{% endif %}" onsubmit="return confirm({{ t('confirm_delete_dept')|tojson }})">
+            <input type="hidden" name="action" value="delete">
+            <button class="btn danger sm" type="submit">{{ t('delete') }}</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">{{ t('no_departments') }}</div>
+  {% endif %}
+</section>
+
+<section class="box" data-searchable>
+  <h2>{{ t('employees') }} <span class="pill">{{ users|length }}</span>
+    <span class="right"><a href="/settings{% if not show_inactive %}?show_inactive=1{% endif %}">{% if show_inactive %}✓ {% endif %}{{ t('show_inactive') }}</a></span></h2>
+  <div class="toolrow"><label class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="search" type="search" placeholder="{{ t('search_placeholder') }}" autocomplete="off"></label></div>
+  <div class="sub" style="margin-bottom:10px">{{ t('display_name_hint') }}</div>
+  {% if users %}
+  {# one form per employee; inputs reference them via form="" so the table markup stays valid #}
+  {% for u in users %}<form method="post" action="/settings/employees/{{ u.user_id }}{% if show_inactive %}?show_inactive=1{% endif %}" id="emp-{{ loop.index }}" hidden></form>{% endfor %}
+  <div class="tbl"><table>
+    <thead><tr><th>{{ t('device_name') }}</th><th>{{ t('id') }}</th><th>{{ t('display_name') }}</th><th>{{ t('department') }}</th><th>{{ t('status') }}</th><th></th></tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr data-search="{{ (u.name ~ ' ' ~ (u.display_name or '') ~ ' ' ~ u.user_id ~ ' ' ~ (u.department.name if u.department else ''))|lower }}">
+        <td class="name"><a href="/employee/{{ u.user_id }}">{{ u.name or ('User ' ~ u.user_id) }}</a></td>
+        <td class="mono">{{ u.user_id }}</td>
+        <td><input form="emp-{{ loop.index }}" type="text" name="display_name" value="{{ u.display_name or '' }}" placeholder="{{ u.name }}" maxlength="255" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);min-width:160px"></td>
+        <td>
+          <select form="emp-{{ loop.index }}" name="department_id" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)">
+            <option value="">{{ t('no_department') }}</option>
+            {% for d in departments %}<option value="{{ d.id }}" {{ 'selected' if u.department_id == d.id else '' }}>{{ d.name }}</option>{% endfor %}
+          </select>
+        </td>
+        <td>{% if u.active %}<span class="chip ok">{{ t('active') }}</span>{% else %}<span class="chip">{{ t('inactive') }}</span>{% endif %}</td>
+        <td class="num"><button form="emp-{{ loop.index }}" class="btn sm" type="submit">{{ t('save') }}</button></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table><div class="empty noresults hidden">{{ t('no_results') }}</div></div>
+  {% else %}
+  <div class="empty">{{ t('no_employees') }}</div>
+  {% endif %}
+</section>
+{% endblock %}

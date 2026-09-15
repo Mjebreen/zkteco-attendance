@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="{{ lang }}" dir="{{ 'rtl' if rtl else 'ltr' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ company }} — {{ t('attendance_report') }} — {{ from_pretty }}{% if is_range %} – {{ to_pretty }}{% endif %}</title>
+  <style>
+    @page { size: A4; margin: 18mm 16mm 22mm 16mm;
+      @bottom-right { content: "{{ t('page') }} " counter(page) " {{ t('of') }} " counter(pages); font-family: Helvetica, Arial, sans-serif; font-size: 8pt; color: #888; }
+      @bottom-left { content: "{{ company }} — {{ t('attendance_report') }}"; font-family: Helvetica, Arial, sans-serif; font-size: 8pt; color: #888; }
+    }
+    *,*::before,*::after{box-sizing:border-box}
+    body{margin:0;color:#1a1a1a;font-family:"Cambria",Georgia,"Times New Roman","Noto Naskh Arabic",serif;font-size:10.5pt;line-height:1.45}
+    html[dir=rtl] body{font-family:"Segoe UI",Tahoma,"Noto Sans Arabic",Arial,sans-serif}
+    .sans{font-family:"Helvetica Neue","Segoe UI",Arial,"Noto Sans Arabic",Tahoma,sans-serif}
+
+    .letterhead{border-bottom:1.5pt solid #1a1a1a;padding-bottom:6mm;margin-bottom:7mm}
+    .letterhead h1{margin:0;font-family:"Helvetica Neue","Segoe UI",Arial,sans-serif;font-size:20pt;font-weight:700;letter-spacing:3px;text-transform:uppercase}
+    html[dir=rtl] .letterhead h1{letter-spacing:0}
+    .letterhead .tag{font-family:"Helvetica Neue","Segoe UI",Arial,sans-serif;font-size:8.5pt;color:#666;letter-spacing:5px;text-transform:uppercase;margin-top:1mm}
+    html[dir=rtl] .letterhead .tag{letter-spacing:1px}
+
+    .doc-title{margin-bottom:6mm}
+    .doc-title h2{margin:0 0 0.5mm 0;font-family:"Helvetica Neue","Segoe UI",Arial,sans-serif;font-weight:500;font-size:16pt;letter-spacing:0.5px}
+    .doc-title .when{font-size:11pt;color:#333}
+    .doc-title .shift{font-size:8.5pt;color:#888;margin-top:1mm;font-style:italic}
+
+    h3.section{font-family:"Helvetica Neue","Segoe UI",Arial,sans-serif;font-weight:600;font-size:10pt;text-transform:uppercase;letter-spacing:2px;color:#1a1a1a;border-bottom:1pt solid #1a1a1a;padding-bottom:1.5mm;margin:7mm 0 3mm;display:flex;justify-content:space-between;align-items:baseline}
+    html[dir=rtl] h3.section{letter-spacing:0}
+    h3.section .count{font-weight:400;color:#888;letter-spacing:0;text-transform:none;font-size:9pt}
+
+    table{width:100%;border-collapse:collapse;font-family:"Helvetica Neue","Segoe UI",Arial,"Noto Sans Arabic",Tahoma,sans-serif;font-size:9.5pt}
+    thead{display:table-header-group}
+    th{text-align:start;font-size:7.5pt;text-transform:uppercase;letter-spacing:1.2px;color:#444;padding:2.2mm 2mm;border-bottom:1pt solid #1a1a1a;font-weight:700;background:#fafafa}
+    html[dir=rtl] th{letter-spacing:0}
+    td{padding:2mm;border-bottom:0.4pt solid #d8d8d8;color:#1a1a1a}
+    tbody tr:nth-child(even) td{background:#fafafa}
+    td.num,th.num{text-align:end;font-variant-numeric:tabular-nums}
+    tr{page-break-inside:avoid}
+    p.none{color:#888;font-style:italic}
+
+    .topbar{position:fixed;top:0;left:0;right:0;background:#1a1a1a;color:#fff;padding:10px 18px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;z-index:100;font-family:"Segoe UI",Helvetica,Arial,sans-serif;font-size:13px}
+    .topbar a{color:#bbb;text-decoration:none}
+    .topbar a:hover{color:#fff}
+    .topbar .btn{background:#16a085;color:#fff;border:0;padding:7px 14px;border-radius:5px;cursor:pointer;font-size:13px;margin-inline-start:10px;font-weight:500;font-family:inherit}
+    .topbar .btn:hover{background:#138d75}
+
+    @media screen{
+      body{background:#888;padding:64px 8px 40px}
+      .page{background:#fff;max-width:210mm;min-height:297mm;margin:0 auto;padding:18mm 16mm 22mm;box-shadow:0 4px 24px rgba(0,0,0,.35);overflow-x:auto}
+    }
+    @media print{
+      .topbar{display:none !important}
+      body{background:#fff;padding:0}
+      .page{box-shadow:none;padding:0;max-width:100%;min-height:0}
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <span>{{ t('print_preview') }} — {{ from_pretty }}{% if is_range %} → {{ to_pretty }}{% endif %}{% if department_name %} · {{ department_name }}{% endif %}</span>
+    <div>
+      <a href="/?from={{ from_date }}&to={{ to_date }}{% if department_id %}&department={{ department_id }}{% endif %}">← {{ t('back_dashboard') }}</a>
+      <a href="{{ lang_switch_url }}">{{ t('switch_lang') }}</a>
+      <button class="btn" type="button" onclick="window.print()">{{ t('print_save') }}</button>
+    </div>
+  </div>
+
+  <div class="page">
+    <div class="letterhead">
+      <h1>{{ company }}</h1>
+      <div class="tag">{{ t('attendance_report') }}{% if department_name %} · {{ department_name }}{% endif %}</div>
+    </div>
+
+    <div class="doc-title">
+      <h2>{% if is_range %}{{ from_pretty }} &ndash; {{ to_pretty }}{% else %}{{ from_pretty }}{% endif %}</h2>
+      <div class="when">{% if is_range %}{{ t('n_day_summary', n=days_total) }}{% else %}{{ t('daily_record') }}{% endif %}</div>
+      {% if shift_label %}<div class="shift">{{ shift_label }}</div>{% endif %}
+    </div>
+
+    {% if is_range %}
+      <h3 class="section"><span>{{ t('attendance_by_employee') }}</span><span class="count">{{ total }} {{ t('employees')|lower }}</span></h3>
+      {% if range_list %}
+      <table>
+        <thead><tr>
+          <th>{{ t('employee') }}</th><th>{{ t('id') }}</th>{% if departments %}<th>{{ t('department') }}</th>{% endif %}
+          <th class="num">{{ t('days_present') }}</th><th class="num">{{ t('days_absent') }}</th><th class="num">{{ t('rate') }}</th><th class="num">{{ t('total_hours') }}</th><th class="num">{{ t('avg_hrs_day') }}</th>
+        </tr></thead>
+        <tbody>
+        {% for e in range_list %}
+          <tr>
+            <td>{{ e.name }}</td><td>{{ e.user_id }}</td>{% if departments %}<td>{{ e.department or '—' }}</td>{% endif %}
+            <td class="num">{{ e.days_present }} / {{ e.days_total }}</td>
+            <td class="num">{{ e.days_absent }}</td>
+            <td class="num">{{ e.attendance_rate|pct }}%</td>
+            <td class="num">{{ '%.1f'|format(e.total_hours) }}</td>
+            <td class="num">{{ '%.2f'|format(e.avg_hours_per_attended_day) if e.days_present else '—' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="none">{{ t('no_employees') }}</p>
+      {% endif %}
+    {% else %}
+      <h3 class="section"><span>{{ t('present') }}</span><span class="count">{{ present }} {{ t('of') }} {{ total }}</span></h3>
+      {% if present_list %}
+      <table>
+        <thead><tr><th>{{ t('employee') }}</th><th>{{ t('id') }}</th>{% if departments %}<th>{{ t('department') }}</th>{% endif %}<th>{{ t('first_in') }}</th><th>{{ t('last_out') }}</th><th class="num">{{ t('hours') }}</th></tr></thead>
+        <tbody>
+        {% for e in present_list %}
+          <tr>
+            <td>{{ e.name }}</td><td>{{ e.user_id }}</td>{% if departments %}<td>{{ e.department or '—' }}</td>{% endif %}
+            <td>{{ e.first_in|hhmmss }}</td>
+            <td>{{ e.last_out|hhmmss }}</td>
+            <td class="num">{{ e.hours_worked|hours }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="none">{{ t('no_one_attended') }}</p>
+      {% endif %}
+
+      <h3 class="section"><span>{{ t('absent') }}</span><span class="count">{{ absent }} {{ t('of') }} {{ total }}</span></h3>
+      {% if absent_list %}
+      <table>
+        <thead><tr><th>{{ t('employee') }}</th><th>{{ t('id') }}</th>{% if departments %}<th>{{ t('department') }}</th>{% endif %}</tr></thead>
+        <tbody>
+        {% for e in absent_list %}
+          <tr><td>{{ e.name }}</td><td>{{ e.user_id }}</td>{% if departments %}<td>{{ e.department or '—' }}</td>{% endif %}</tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="none">{{ t('everyone_attended') }}</p>
+      {% endif %}
+    {% endif %}
+  </div>
+
+  {% if auto_print %}<script>window.addEventListener('load', function(){ setTimeout(function(){ window.print(); }, 400); });</script>{% endif %}
+</body>
+</html>

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}{% if employee %}{{ employee.name }} — {% endif %}{{ company }}{% endblock %}
+{% block content %}
+<script>document.body.setAttribute('data-target','{{ target_hours }}');</script>
+{% if not employee %}
+  <div class="box"><div class="empty">{{ t('employee_not_found') }}</div><a class="btn ghost" href="/">← {{ t('back_dashboard') }}</a></div>
+{% else %}
+<div class="pagehead">
+  <div>
+    <div class="sub"><a href="/">{{ t('dashboard') }}</a> / {{ t('employee_profile') }}</div>
+    <h1>{{ employee.name }} <span class="pill">{{ t('id') }} {{ employee.user_id }}</span>{% if employee.department %}<span class="pill info">{{ employee.department }}</span>{% endif %}</h1>
+    <div class="sub">{{ t('history') }}: {{ from_date }} → {{ to_date }} · {{ t('profile_hint') }}</div>
+  </div>
+  <div class="actions">
+    <a class="btn ghost" href="/settings">{{ t('settings') }}</a>
+    <a class="btn ghost" href="/?from={{ from_date }}&to={{ to_date }}">← {{ t('back_dashboard') }}</a>
+  </div>
+</div>
+
+<form class="picker" method="get" action="/employee/{{ employee.user_id }}">
+  <span class="lbl">{{ t('from') }}</span><input type="date" name="from" value="{{ from_date }}">
+  <span class="sep">→</span>
+  <span class="lbl">{{ t('to') }}</span><input type="date" name="to" value="{{ to_date }}">
+  <button class="btn" type="submit">{{ t('show') }}</button>
+  <span class="quick">
+    <a class="btn ghost sm" href="?range=7">{{ t('last_7') }}</a>
+    <a class="btn ghost sm" href="?range=30">{{ t('last_30') }}</a>
+    <a class="btn ghost sm" href="?from={{ now.strftime('%Y-%m-01') }}&to={{ now.strftime('%Y-%m-%d') }}">{{ t('this_month') }}</a>
+  </span>
+</form>
+
+<div class="summary">
+  <div class="card ok"><div class="lbl">{{ t('days_present') }}</div><div class="val">{{ days_present }}<span style="font-size:16px;color:var(--faint)"> / {{ days_total }}</span></div></div>
+  <div class="card bad"><div class="lbl">{{ t('days_absent') }}</div><div class="val">{{ days_absent }}</div></div>
+  <div class="card"><div class="lbl">{{ t('attendance') }}</div><div class="val">{{ (rate*100)|int }}%</div></div>
+  <div class="card info"><div class="lbl">{{ t('total_hours') }}</div><div class="val">{{ '%.1f'|format(total_hours) }}</div><div class="vsub">{{ t('avg_hrs_day') }}: {{ '%.2f'|format(avg_hours) if days_present else '—' }}</div></div>
+  <div class="card"><div class="lbl">{{ t('target_met') }}</div><div class="val">{{ target_met_days }}</div><div class="vsub">{{ t('target_hours', h=target_hours|round(1)|string|replace('.0','')) }}</div></div>
+</div>
+
+<section class="box">
+  <h2>{{ t('history') }} <span class="right">{{ days_total }} {{ t('days') }}</span></h2>
+  <div class="tbl"><table>
+    <thead><tr><th>{{ t('date') }}</th><th>{{ t('weekday') }}</th><th>{{ t('status') }}</th><th>{{ t('first_in') }}</th><th>{{ t('last_out') }}</th><th class="num">{{ t('punches') }}</th><th class="num">{{ t('hours') }}</th><th>{{ t('target') }}</th></tr></thead>
+    <tbody>
+    {% for r in rows %}{% set e = r.e %}
+      <tr {% if e.attended %}data-start="{{ e.first_in.isoformat() }}" data-open="{{ '1' if r.open else '0' }}"{% endif %}>
+        <td class="mono">{{ r.date.isoformat() }}{% if r.live %} <span class="pill live">{{ t('live') }}</span>{% endif %}</td>
+        <td>{{ fmt_date(r.date, 'short').split(',')[0] if lang == 'en' else fmt_date(r.date, 'short').split('،')[0] }}</td>
+        <td>
+          {% if not e.attended %}<span class="chip bad">{{ t('absent') }}</span>
+          {% elif r.open %}<span class="chip warn open"><span class="dot"></span>{{ t('not_checked_out') }}</span>
+          {% elif e.last_out %}<span class="chip ok">{{ t('present') }}</span>
+          {% else %}<span class="chip">{{ t('no_checkout') }}</span>{% endif %}
+          {% if r.flag == 'late' %} <span class="chip bad">{{ t('late') }}</span>{% elif r.flag == 'early' %} <span class="chip info">{{ t('early') }}</span>{% endif %}
+        </td>
+        <td class="mono">{{ e.first_in|hhmmss }}</td>
+        <td class="mono">{{ e.last_out|hhmmss }}</td>
+        <td class="num">{{ e.punches if e.attended else '—' }}</td>
+        <td class="num"><span class="hours-val">{% if r.hours %}{{ '%.2f'|format(r.hours) }}{% else %}—{% endif %}</span></td>
+        <td>{% if e.attended %}<span class="progress"><span class="bar {{ 'ok' if r.progress >= 1 else ('warn' if r.progress < 0.5 else '') }}"><div style="width:{{ (r.progress*100)|int }}%"></div></span><span class="pct">{{ (r.progress*100)|int }}%</span></span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+{% endblock %}
+{% block scripts %}<script>tickLive();setInterval(tickLive,30000);</script>{% endblock %}

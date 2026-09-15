@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block content %}
+{% set qs_range = 'from=' ~ from_date ~ '&to=' ~ to_date ~ (('&department=' ~ department_id) if department_id else '') %}
+<script>document.body.setAttribute('data-target','{{ target_hours }}');{% if live %}document.body.setAttribute('data-live','1');{% endif %}</script>
+
+<div class="pagehead">
+  <div>
+    <h1>{{ t('dashboard') }} {% if live %}<span class="pill live">{{ t('live') }}</span>{% endif %}{% if department_name %}<span class="pill info">{{ department_name }}</span>{% endif %}</h1>
+    <div class="sub">{{ window_label }}</div>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/print?{{ qs_range }}" target="_blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v7H6z"/></svg>{{ t('print_save') }}</a>
+    <a class="btn ghost" href="/export.csv?{{ qs_range }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v3h16v-3"/></svg>{{ t('export_csv') }}</a>
+    <a class="btn ghost" href="{{ url_with(synced=None, sync_error=None) }}">{{ t('refresh') }}</a>
+  </div>
+</div>
+
+{% if synced %}<div class="notice ok">{% if synced == 'queued' %}{{ t('sync_queued') }}{% else %}{{ t('synced_ok') }}{% endif %}</div>{% endif %}
+{% if sync_error %}<div class="notice bad">{{ t('sync_failed') }}: {{ sync_error }}</div>{% endif %}
+
+<form class="picker" method="get" action="/">
+  {% if department_id %}<input type="hidden" name="department" value="{{ department_id }}">{% endif %}
+  <span class="lbl">{{ t('from') }}</span>
+  <input type="date" name="from" value="{{ from_date }}">
+  <span class="sep">→</span>
+  <span class="lbl">{{ t('to') }}</span>
+  <input type="date" name="to" value="{{ to_date }}">
+  <button class="btn" type="submit">{{ t('show') }}</button>
+  <span class="quick">
+    <a class="btn ghost sm {{ 'on' if from_date == to_date and from_date != today else '' }}" href="{{ url_with(**{'from': 'yesterday', 'to': 'yesterday', 'range': None, 'date': None}) }}">{{ t('yesterday') }}</a>
+    <a class="btn ghost sm {{ 'on' if from_date == to_date == today else '' }}" href="{{ url_with(**{'from': 'today', 'to': 'today', 'range': None, 'date': None}) }}">{{ t('today') }}</a>
+    <a class="btn ghost sm" href="{{ url_with(**{'range': 7, 'from': None, 'to': None, 'date': None}) }}">{{ t('last_7') }}</a>
+    <a class="btn ghost sm" href="{{ url_with(**{'range': 30, 'from': None, 'to': None, 'date': None}) }}">{{ t('last_30') }}</a>
+    <a class="btn ghost sm" href="{{ url_with(**{'from': month_start, 'to': today, 'range': None, 'date': None}) }}">{{ t('this_month') }}</a>
+  </span>
+</form>
+
+<div class="toolrow">
+  <label class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="search" type="search" placeholder="{{ t('search_placeholder') }}" autocomplete="off"></label>
+  {% if departments %}
+  <select onchange="location.href=this.value">
+    <option value="{{ url_with(department=None) }}" {{ 'selected' if not department_id else '' }}>{{ t('all_departments') }}</option>
+    {% for d in departments %}<option value="{{ url_with(department=d.id) }}" {{ 'selected' if department_id == d.id else '' }}>{{ d.name }}</option>{% endfor %}
+  </select>
+  {% endif %}
+  <form id="syncform" method="post" action="/sync" data-busy="{{ t('syncing') }}">
+    <input type="hidden" name="from" value="{{ from_date }}"><input type="hidden" name="to" value="{{ to_date }}">
+    {% if department_id %}<input type="hidden" name="department" value="{{ department_id }}">{% endif %}
+    <button class="btn ghost" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"/></svg>{{ t('sync_now') }}</button>
+  </form>
+  {% if last_error and sync_stale %}<span class="pill warn" title="{{ last_error }}">{{ t('last_error') }}: {{ last_error[:60] }}</span>{% endif %}
+</div>
+
+{% if is_range %}
+  <div class="summary">
+    <div class="card"><div class="lbl">{{ t('date_range') }}</div><div class="val" style="font-size:22px">{{ days_total }} {{ t('days') }}</div><div class="vsub">{{ from_pretty }} → {{ to_pretty }}</div></div>
+    <div class="card"><div class="lbl">{{ t('employees') }}</div><div class="val">{{ total }}</div></div>
+    <div class="card ok"><div class="lbl">{{ t('avg_present_day') }}</div><div class="val">{{ avg_present }}</div></div>
+    <div class="card info"><div class="lbl">{{ t('total_hours') }}</div><div class="val">{{ total_hours }}</div></div>
+  </div>
+
+  {% if presence and total %}
+  <section class="box">
+    <h2>{{ t('presence_per_day') }} <span class="right">{{ t('present') }} / {{ total }}</span></h2>
+    <div class="spark">
+      {% for p in presence %}<div class="col" title="{{ fmt_date(p.date, 'short') }}: {{ p.count }} / {{ total }}"><i style="height:{{ p.pct }}%"></i></div>{% endfor %}
+    </div>
+    <div class="spark-labels"><span>{{ fmt_date(presence[0].date, 'short') }}</span><span>{{ fmt_date(presence[-1].date, 'short') }}</span></div>
+  </section>
+  {% endif %}
+
+  {% if dept_breakdown|length > 1 %}
+  <section class="box">
+    <h2>{{ t('by_department') }}</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>{{ t('department') }}</th><th class="num">{{ t('employees') }}</th><th>{{ t('attendance') }}</th><th class="num">{{ t('avg_present_day') }}</th><th class="num">{{ t('total_hours') }}</th></tr></thead>
+      <tbody>{% for g in dept_breakdown %}
+        <tr><td class="name">{{ g.name }}</td><td class="num">{{ g.employees }}</td>
+          <td><span class="progress"><span class="bar thin {{ 'ok' if g.rate >= 0.9 else ('warn' if g.rate < 0.5 else '') }}"><div style="width:{{ (g.rate*100)|int }}%"></div></span><span class="pct">{{ (g.rate*100)|int }}%</span></span></td>
+          <td class="num">{{ '%.1f'|format(g.avg_present) }}</td><td class="num">{{ '%.1f'|format(g.hours) }}</td></tr>
+      {% endfor %}</tbody>
+    </table></div>
+  </section>
+  {% endif %}
+
+  <section class="box" data-searchable>
+    <h2>{{ t('attendance_summary') }} <span class="pill">{{ total }} · {{ days_total }} {{ t('days') }}</span><span class="right">{{ t('target_hours', h=target_hours|round(1)|string|replace('.0','')) }}</span></h2>
+    {% if range_rows %}
+    <div class="tbl"><table>
+      <thead><tr>
+        <th>{{ t('employee') }}</th><th>{{ t('id') }}</th>{% if departments %}<th>{{ t('department') }}</th>{% endif %}
+        <th>{{ t('attendance') }}</th><th class="num">{{ t('days_present') }}</th><th class="num">{{ t('days_absent') }}</th><th class="num">{{ t('total_hours') }}</th><th class="num">{{ t('avg_hrs_day') }}</th>
+      </tr></thead>
+      <tbody>
+      {% for r in range_rows %}{% set e = r.e %}
+        <tr data-search="{{ r.search }}">
+          <td class="name"><a href="/employee/{{ e.user_id }}?from={{ from_date }}&to={{ to_date }}">{{ e.name }}</a></td>
+          <td class="mono">{{ e.user_id }}</td>
+          {% if departments %}<td>{% if e.department %}<span class="dept">{{ e.department }}</span>{% else %}<span class="mono">—</span>{% endif %}</td>{% endif %}
+          <td><span class="progress"><span class="bar {{ 'ok' if e.attendance_rate >= 0.9 else ('warn' if e.attendance_rate < 0.5 else '') }}"><div style="width:{{ e.attendance_rate|pct }}%"></div></span><span class="pct">{{ e.attendance_rate|pct }}%</span></span></td>
+          <td class="num">{{ e.days_present }} / {{ e.days_total }}</td>
+          <td class="num">{{ e.days_absent }}</td>
+          <td class="num">{{ '%.1f'|format(e.total_hours) }}</td>
+          <td class="num">{% if e.days_present %}{{ '%.2f'|format(e.avg_hours_per_attended_day) }} {% if r.met %}<span class="chip ok" title="{{ t('target_met') }}">✓</span>{% endif %}{% else %}—{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table><div class="empty noresults hidden">{{ t('no_results') }}</div></div>
+    {% else %}
+    <div class="empty">{{ t('no_employees') }}</div>
+    {% endif %}
+  </section>
+
+{% else %}
+  <div class="summary">
+    <div class="card"><div class="lbl">{{ t('total_employees') }}</div><div class="val">{{ total }}</div></div>
+    <div class="card ok"><div class="lbl">{{ t('present') }}</div><div class="val">{{ present }}</div><div class="vsub">{{ (present / total * 100)|int if total else 0 }}%</div></div>
+    {% if live %}<div class="card warn"><div class="lbl">{{ t('currently_in') }}</div><div class="val">{{ currently_in }}</div><div class="vsub">{{ t('not_checked_out') }}</div></div>{% endif %}
+    <div class="card bad"><div class="lbl">{{ t('absent') }}</div><div class="val">{{ absent }}</div></div>
+    <div class="card info"><div class="lbl">{{ t('total_hours') }}</div><div class="val">{{ total_hours }}</div></div>
+  </div>
+
+  {% if dept_breakdown|length > 1 %}
+  <section class="box">
+    <h2>{{ t('by_department') }}</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>{{ t('department') }}</th><th class="num">{{ t('total_employees') }}</th><th class="num">{{ t('present') }}</th>{% if live %}<th class="num">{{ t('currently_in') }}</th>{% endif %}<th class="num">{{ t('absent') }}</th><th>{{ t('attendance') }}</th><th class="num">{{ t('total_hours') }}</th></tr></thead>
+      <tbody>{% for g in dept_breakdown %}
+        <tr><td class="name">{{ g.name }}</td><td class="num">{{ g.total }}</td><td class="num">{{ g.present }}</td>{% if live %}<td class="num">{{ g.open }}</td>{% endif %}<td class="num">{{ g.absent }}</td>
+          <td><span class="progress"><span class="bar thin {{ 'ok' if g.rate >= 0.9 else ('warn' if g.rate < 0.5 else '') }}"><div style="width:{{ (g.rate*100)|int }}%"></div></span><span class="pct">{{ (g.rate*100)|int }}%</span></span></td>
+          <td class="num">{{ '%.1f'|format(g.hours) }}</td></tr>
+      {% endfor %}</tbody>
+    </table></div>
+  </section>
+  {% endif %}
+
+  <section class="box" data-searchable>
+    <h2>{{ t('present') }} <span class="pill ok">{{ present }}</span>{% if live %}<span class="pill live">{{ t('live') }}</span>{% endif %}{% if late_count %}<span class="pill bad">{{ late_count }} {{ t('late')|lower }}</span>{% endif %}{% if early_count %}<span class="pill info">{{ early_count }} {{ t('early')|lower }}</span>{% endif %}<span class="right">{{ t('target_hours', h=target_hours|round(1)|string|replace('.0','')) }}{% if late_after %} · {{ t('late_after', t=late_after) }}{% endif %}{% if early_before %} · {{ t('early_before', t=early_before) }}{% endif %}</span></h2>
+    {% if present_rows %}
+    <div class="tbl"><table>
+      <thead><tr>
+        <th>{{ t('employee') }}</th><th>{{ t('id') }}</th>{% if departments %}<th>{{ t('department') }}</th>{% endif %}
+        <th>{{ t('status') }}</th><th>{{ t('first_in') }}</th><th>{{ t('last_out') }}</th><th class="num">{{ t('hours') }}</th><th>{{ t('target') }}</th>
+      </tr></thead>
+      <tbody>
+      {% for r in present_rows %}{% set e = r.e %}
+        <tr data-search="{{ r.search }}" data-start="{{ e.first_in.isoformat() }}" data-open="{{ '1' if r.open else '0' }}">
+          <td class="name"><a href="/employee/{{ e.user_id }}">{{ e.name }}</a></td>
+          <td class="mono">{{ e.user_id }}</td>
+          {% if departments %}<td>{% if e.department %}<span class="dept">{{ e.department }}</span>{% else %}<span class="mono">—</span>{% endif %}</td>{% endif %}
+          <td>
+            {% if r.open %}<span class="chip warn open"><span class="dot"></span>{{ t('not_checked_out') }}</span>
+            {% elif e.last_out %}<span class="chip ok"><span class="dot"></span>{{ t('checked_out') }} {{ e.last_out|hhmm }}</span>
+            {% else %}<span class="chip"><span class="dot"></span>{{ t('no_checkout') }}</span>{% endif %}
+            {% if r.flag == 'late' %} <span class="chip bad">{{ t('late') }}</span>{% elif r.flag == 'early' %} <span class="chip info">{{ t('early') }}</span>{% endif %}
+          </td>
+          <td class="mono">{{ e.first_in|hhmmss }}</td>
+          <td class="mono">{{ e.last_out|hhmmss }}</td>
+          <td class="num"><span class="hours-val">{% if r.hours %}{{ '%.2f'|format(r.hours) }}{% else %}—{% endif %}</span></td>
+          <td><span class="progress"><span class="bar {{ 'ok' if r.progress >= 1 else ('warn' if r.progress < 0.5 else '') }}"><div style="width:{{ (r.progress*100)|int }}%"></div></span><span class="pct">{{ (r.progress*100)|int }}%</span></span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table><div class="empty noresults hidden">{{ t('no_results') }}</div></div>
+    {% if live %}<div class="live-note">{{ t('live_note') }}</div>{% endif %}
+    {% else %}
+    <div class="empty">{{ t('no_one_attended') }}</div>
+    {% endif %}
+  </section>
+
+  <section class="box" data-searchable>
+    <h2>{{ t('absent') }} <span class="pill bad">{{ absent }}</span></h2>
+    {% if absent_rows %}
+    <div class="tbl"><table>
+      <thead><tr><th>{{ t('employee') }}</th><th>{{ t('id') }}</th>{% if departments %}<th>{{ t('department') }}</th>{% endif %}</tr></thead>
+      <tbody>
+      {% for r in absent_rows %}{% set e = r.e %}
+        <tr data-search="{{ r.search }}"><td class="name"><a href="/employee/{{ e.user_id }}">{{ e.name }}</a></td><td class="mono">{{ e.user_id }}</td>{% if departments %}<td>{% if e.department %}<span class="dept">{{ e.department }}</span>{% else %}<span class="mono">—</span>{% endif %}</td>{% endif %}</tr>
+      {% endfor %}
+      </tbody>
+    </table><div class="empty noresults hidden">{{ t('no_results') }}</div></div>
+    {% else %}
+    <div class="empty">{% if total %}{{ t('everyone_attended') }}{% else %}{{ t('no_employees') }}{% endif %}</div>
+    {% endif %}
+  </section>
+{% endif %}
+{% endblock %}
