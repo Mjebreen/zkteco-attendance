@@ -212,6 +212,7 @@ history the device still holds.
 | Feature | Where | Notes |
 |---|---|---|
 | **Live day** | `/` on the current shift day | "Live" badge; present rows show *Hasn't checked out yet* (single punch so far) or *Checked out HH:MM*; hours for open sessions tick every 30 s and the page refreshes itself every 60 s. A *Currently in* card counts open sessions. |
+| **Hours:Minutes** | everywhere in the UI, print view, PDFs | durations display as `H:MM` (5.99 h shows `5:59`; minutes are floored so a target never shows as met early). The API keeps decimal `hours` and adds `hours_hm` / `total_hours_hm`; CSV exports carry both. |
 | **Target bar** | present table, employee page | progress toward `TARGET_HOURS` (default 6). Reports and the API still use the completed first/last pair only; live hours are dashboard-only. |
 | **Late / Early badges** | present table, employee page | by first-punch time of day: **Late** from `LATE_AFTER_TIME` (18:30) until `LATE_EARLY_TURN_TIME` (01:00, wraps midnight), **Early** from the turn point until `EARLY_BEFORE_TIME` (13:00). Set a value empty to disable that badge. |
 | **Dark mode** | top bar toggle | follows the OS preference by default; the choice is remembered per browser. |

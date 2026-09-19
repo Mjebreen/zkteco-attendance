@@ -20,7 +20,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from app.i18n import fmt_date, t
-from app.rules import DailyReport, RangeReport
+from app.rules import DailyReport, RangeReport, format_hm
 
 log = logging.getLogger("app.pdf")
 
@@ -182,7 +182,7 @@ def build_daily_pdf(output_path: str, company: str, report: DailyReport, lang: s
         _table(
             [
                 [t(lang, "total_employees"), t(lang, "present"), t(lang, "absent"), t(lang, "total_hours")],
-                [str(len(report.employees)), str(len(present)), str(len(absent)), f"{report.total_hours:.1f}"],
+                [str(len(report.employees)), str(len(present)), str(len(absent)), format_hm(report.total_hours)],
             ],
             [42 * mm] * 4, _HEADER_DARK, None, st["fonts"], rtl, font_size=11, center_from_col=None, pad=7, repeat=0,
         )
@@ -199,7 +199,7 @@ def build_daily_pdf(output_path: str, company: str, report: DailyReport, lang: s
                 [e.name, e.user_id] + ([e.department or "\u2014"] if with_dept else []) + [
                     e.first_in.strftime("%H:%M:%S") if e.first_in else "\u2014",
                     e.last_out.strftime("%H:%M:%S") if e.last_out else "\u2014",
-                    f"{e.hours_worked:.2f}" if e.hours_worked else "\u2014",
+                    format_hm(e.hours_worked) if e.hours_worked else "\u2014",
                 ]
             )
         widths = ([50 * mm, 18 * mm, 34 * mm] if with_dept else [65 * mm, 25 * mm]) + [22 * mm, 22 * mm, 22 * mm]
@@ -248,7 +248,7 @@ def build_range_pdf(output_path: str, company: str, report: RangeReport, lang: s
             [
                 [t(lang, "days"), t(lang, "employees"), t(lang, "avg_present_day"), t(lang, "total_hours")],
                 [str(report.days_total), str(len(report.employees)), f"{report.avg_present_per_day:.1f}",
-                 f"{report.total_hours:.1f}"],
+                 format_hm(report.total_hours)],
             ],
             [42 * mm] * 4, _HEADER_DARK, None, st["fonts"], rtl, font_size=11, center_from_col=None, pad=7, repeat=0,
         )
@@ -266,8 +266,8 @@ def build_range_pdf(output_path: str, company: str, report: RangeReport, lang: s
                     f"{e.days_present} / {e.days_total}",
                     str(e.days_absent),
                     f"{int(e.attendance_rate * 100)}%",
-                    f"{e.total_hours:.1f}",
-                    f"{e.avg_hours_per_attended_day:.2f}" if e.days_present else "\u2014",
+                    format_hm(e.total_hours),
+                    format_hm(e.avg_hours_per_attended_day) if e.days_present else "\u2014",
                 ]
             )
         widths = ([40 * mm, 14 * mm, 28 * mm] if with_dept else [52 * mm, 18 * mm]) + [

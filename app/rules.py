@@ -217,6 +217,12 @@ def checkin_flag(first_in: datetime | None, late_after: str, early_before: str, 
     return None
 
 
+def format_hm(hours: float | None) -> str:
+    """Decimal hours -> 'H:MM' (minutes floored, so 5.99 h shows 5:59, never a premature 6:00)."""
+    total_minutes = int(max(0.0, hours or 0.0) * 60 + 1e-6)
+    return f"{total_minutes // 60}:{total_minutes % 60:02d}"
+
+
 def target_progress(hours: float, target_hours: float) -> float:
     """0..1 completion of the daily hours target."""
     if target_hours <= 0:

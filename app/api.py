@@ -25,6 +25,7 @@ from app.config import Settings, get_settings
 from app.dates import resolve_range
 from app.db import get_db
 from app.i18n import normalize_lang
+from app.rules import format_hm
 from app.sync_trigger import trigger_sync
 
 log = logging.getLogger("app.api")
@@ -148,6 +149,7 @@ def summary(
             "present": len(rep.present),
             "absent": len(rep.absent),
             "total_hours": round(rep.total_hours, 2),
+            "total_hours_hm": format_hm(rep.total_hours),
             "employees": [
                 {
                     "id": e.user_id,
@@ -156,6 +158,7 @@ def summary(
                     "first_in": _iso(e.first_in),
                     "last_out": _iso(e.last_out),
                     "hours": round(e.hours_worked, 2),
+                    "hours_hm": format_hm(e.hours_worked),
                     "attended": e.attended,
                 }
                 for e in rep.employees
@@ -170,6 +173,7 @@ def summary(
         "total": len(rep.employees),
         "avg_present_per_day": round(rep.avg_present_per_day, 2),
         "total_hours": round(rep.total_hours, 2),
+        "total_hours_hm": format_hm(rep.total_hours),
         "employees": [
             {
                 "id": e.user_id,
@@ -179,7 +183,9 @@ def summary(
                 "days_total": e.days_total,
                 "days_absent": e.days_absent,
                 "total_hours": round(e.total_hours, 2),
+                "total_hours_hm": format_hm(e.total_hours),
                 "avg_hours_per_attended_day": round(e.avg_hours_per_attended_day, 2),
+                "avg_hours_hm": format_hm(e.avg_hours_per_attended_day),
                 "attendance_rate": round(e.attendance_rate, 4),
             }
             for e in rep.employees

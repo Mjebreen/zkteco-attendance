@@ -210,7 +210,7 @@
       document.querySelectorAll('tr[data-start]').forEach(function(tr){
         if(tr.getAttribute('data-open')!=='1')return;
         var start=new Date(tr.getAttribute('data-start'));var h=Math.max(0,(Date.now()-start.getTime())/36e5);
-        var ht=tr.querySelector('.hours-val');if(ht)ht.textContent=h.toFixed(2);
+        var ht=tr.querySelector('.hours-val');if(ht){var m=Math.floor(h*60+1e-6);ht.textContent=Math.floor(m/60)+':'+('0'+(m%60)).slice(-2);}
         var bar=tr.querySelector('.bar>div');var pct=target>0?Math.min(100,h/target*100):100;
         if(bar){bar.style.width=pct.toFixed(0)+'%';var b=bar.parentNode;b.classList.toggle('ok',pct>=100);b.classList.toggle('warn',pct<50);}
         var pc=tr.querySelector('.pct');if(pc)pc.textContent=Math.round(pct)+'%';

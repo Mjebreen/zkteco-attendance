@@ -188,7 +188,7 @@ def test_employee_profile_page(client):
     assert "Alice" in html and "2026-05-20" in html and "2026-05-21" in html and "2026-05-23" in html
     assert html.count("Absent") >= 2  # 21st and 23rd
     assert "No check-out recorded" in html  # 22nd single punch
-    assert "8.00" in html
+    assert "8:00" in html
     assert client.get("/employee/nope", auth=BASIC_AUTH).status_code == 404
     assert client.get("/employee/1").status_code == 401
 
@@ -200,7 +200,7 @@ def test_csv_export_and_arabic_pdf(client):
     assert 'attendance_2026-05-23.csv' in r.headers["content-disposition"]
     text = r.content.decode("utf-8-sig")
     assert text.splitlines()[0].startswith("date,employee,id,department,attended")
-    assert "محمد,3,,yes,2026-05-23T08:00:00,2026-05-23T15:30:00,7.50,2" in text
+    assert "محمد,3,,yes,2026-05-23T08:00:00,2026-05-23T15:30:00,7.50,7:30,2" in text
     assert "Alice,1,,no," in text
 
     r = client.get("/export.csv?from=2026-05-20&to=2026-05-23", auth=BASIC_AUTH)
@@ -247,4 +247,4 @@ def test_late_and_early_badges_render(client):
     assert html.count('class="chip info">Early<') == 1
     assert "late after 18:30" in html and "early before 13:00" in html
     r = client.get("/export.csv?date=2026-05-23", auth=BASIC_AUTH)
-    assert ",1,,yes,2026-05-23T19:05:00,,0.00,1,late" in r.text and ",2,,yes,2026-05-23T09:00:00,,0.00,1,early" in r.text
+    assert ",1,,yes,2026-05-23T19:05:00,,0.00,0:00,1,late" in r.text and ",2,,yes,2026-05-23T09:00:00,,0.00,0:00,1,early" in r.text

@@ -33,7 +33,7 @@
   <div class="card ok"><div class="lbl">{{ t('days_present') }}</div><div class="val">{{ days_present }}<span style="font-size:16px;color:var(--faint)"> / {{ days_total }}</span></div></div>
   <div class="card bad"><div class="lbl">{{ t('days_absent') }}</div><div class="val">{{ days_absent }}</div></div>
   <div class="card"><div class="lbl">{{ t('attendance') }}</div><div class="val">{{ (rate*100)|int }}%</div></div>
-  <div class="card info"><div class="lbl">{{ t('total_hours') }}</div><div class="val">{{ '%.1f'|format(total_hours) }}</div><div class="vsub">{{ t('avg_hrs_day') }}: {{ '%.2f'|format(avg_hours) if days_present else '—' }}</div></div>
+  <div class="card info"><div class="lbl">{{ t('total_hours') }}</div><div class="val">{{ total_hours|hm }}</div><div class="vsub">{{ t('avg_hrs_day') }}: {{ avg_hours|hm if days_present else '—' }}</div></div>
   <div class="card"><div class="lbl">{{ t('target_met') }}</div><div class="val">{{ target_met_days }}</div><div class="vsub">{{ t('target_hours', h=target_hours|round(1)|string|replace('.0','')) }}</div></div>
 </div>
 
@@ -56,7 +56,7 @@
         <td class="mono">{{ e.first_in|hhmmss }}</td>
         <td class="mono">{{ e.last_out|hhmmss }}</td>
         <td class="num">{{ e.punches if e.attended else '—' }}</td>
-        <td class="num"><span class="hours-val">{% if r.hours %}{{ '%.2f'|format(r.hours) }}{% else %}—{% endif %}</span></td>
+        <td class="num"><span class="hours-val">{{ r.hours|hours }}</span></td>
         <td>{% if e.attended %}<span class="progress"><span class="bar {{ 'ok' if r.progress >= 1 else ('warn' if r.progress < 0.5 else '') }}"><div style="width:{{ (r.progress*100)|int }}%"></div></span><span class="pct">{{ (r.progress*100)|int }}%</span></span>{% endif %}</td>
       </tr>
     {% endfor %}

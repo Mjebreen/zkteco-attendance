@@ -40,7 +40,13 @@ LANG_COOKIE = "lang"
 
 
 def _fmt_hours(v: float | None) -> str:
-    return f"{v:.2f}" if v else "—"
+    """H:MM, or a dash when there is no completed duration."""
+    return rules.format_hm(v) if v else "—"
+
+
+def _fmt_duration(v: float | None) -> str:
+    """H:MM, always (0:00 for nothing) - used for totals."""
+    return rules.format_hm(v)
 
 
 def _fmt_time(dt: datetime | None) -> str:
@@ -56,6 +62,7 @@ def _pct(rate: float) -> int:
 
 
 templates.env.filters["hours"] = _fmt_hours
+templates.env.filters["hm"] = _fmt_duration
 templates.env.filters["hhmmss"] = _fmt_time
 templates.env.filters["hhmm"] = _fmt_hm
 templates.env.filters["pct"] = _pct
@@ -269,7 +276,7 @@ def _report_context(request: Request, db: Session, settings: Settings, page: str
             days_total=rep.days_total,
             total=len(rep.employees),
             avg_present=f"{rep.avg_present_per_day:.1f}",
-            total_hours=f"{rep.total_hours:.1f}",
+            total_hours=rules.format_hm(rep.total_hours),
             range_list=rep.employees,
             range_rows=[
                 {"e": e, "search": f"{e.name} {e.user_id} {e.department or ''}".lower(),
@@ -299,7 +306,7 @@ def _report_context(request: Request, db: Session, settings: Settings, page: str
             currently_in=sum(1 for r in rows if r["open"]),
             late_count=sum(1 for r in rows if r["flag"] == "late"),
             early_count=sum(1 for r in rows if r["flag"] == "early"),
-            total_hours=f"{rep.total_hours:.1f}",
+            total_hours=rules.format_hm(rep.total_hours),
             present_list=rep.present,
             absent_list=rep.absent,
             present_rows=rows,
@@ -334,24 +341,26 @@ def export_csv(request: Request, db: Session = Depends(get_db), settings: Settin
     w = csv.writer(buf)
     if from_date == to_date:
         rep = service.build_daily(db, from_date, settings.day_start_hour, dept_id)
-        w.writerow(["date", "employee", "id", "department", "attended", "first_in", "last_out", "hours", "punches", "checkin"])
+        w.writerow(["date", "employee", "id", "department", "attended", "first_in", "last_out", "hours", "hours_hm", "punches", "checkin"])
         for e in rep.employees:
             w.writerow([
                 from_date.isoformat(), e.name, e.user_id, e.department or "", "yes" if e.attended else "no",
                 e.first_in.isoformat(timespec="seconds") if e.first_in else "",
                 e.last_out.isoformat(timespec="seconds") if e.last_out else "",
-                f"{e.hours_worked:.2f}", e.punches, _flag(e, settings) or "",
+                f"{e.hours_worked:.2f}", rules.format_hm(e.hours_worked), e.punches, _flag(e, settings) or "",
             ])
         filename = f"attendance_{from_date:%Y-%m-%d}.csv"
     else:
         rep = service.build_range(db, from_date, to_date, settings.day_start_hour, dept_id)
         w.writerow(["from", "to", "employee", "id", "department", "days_present", "days_total", "days_absent",
-                    "attendance_rate", "total_hours", "avg_hours_per_attended_day"])
+                    "attendance_rate", "total_hours", "total_hours_hm", "avg_hours_per_attended_day",
+                    "avg_hours_hm"])
         for e in rep.employees:
             w.writerow([
                 from_date.isoformat(), to_date.isoformat(), e.name, e.user_id, e.department or "",
                 e.days_present, e.days_total, e.days_absent, f"{e.attendance_rate:.4f}",
-                f"{e.total_hours:.2f}", f"{e.avg_hours_per_attended_day:.2f}",
+                f"{e.total_hours:.2f}", rules.format_hm(e.total_hours),
+                f"{e.avg_hours_per_attended_day:.2f}", rules.format_hm(e.avg_hours_per_attended_day),
             ])
         filename = f"attendance_{from_date:%Y-%m-%d}_to_{to_date:%Y-%m-%d}.csv"
     data = "﻿" + buf.getvalue()  # BOM so Excel opens UTF-8 (Arabic names) correctly

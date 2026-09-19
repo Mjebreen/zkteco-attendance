@@ -127,7 +127,7 @@ def test_dashboard_and_print_require_basic_auth(client):
     r = client.get("/?date=2026-05-23", auth=BASIC_AUTH)
     assert r.status_code == 200
     html = r.text
-    assert "Alice" in html and "08:00:00" in html and "17:30:00" in html and "9.50" in html
+    assert "Alice" in html and "08:00:00" in html and "17:30:00" in html and "9:30" in html
     assert "Absent" in html and "Bob" in html
     assert "Sync now" in html and "Last synced" in html
 

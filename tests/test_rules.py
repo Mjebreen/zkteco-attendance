@@ -152,3 +152,13 @@ def test_range_report_swaps_reversed_dates_and_ties_sorted_by_name():
     rep = rules.range_report(EMP, punches, date(2026, 5, 21), date(2026, 5, 20), 7)
     assert rep.from_date == date(2026, 5, 20) and rep.to_date == date(2026, 5, 21)
     assert [e.user_id for e in rep.employees] == ["1", "2", "3"]  # Alice, Bob tie on 1 day -> by name
+
+
+def test_format_hm():
+    assert rules.format_hm(5.99) == "5:59"  # never rounds up to a premature 6:00
+    assert rules.format_hm(6.0) == "6:00"
+    assert rules.format_hm(9.25) == "9:15"
+    assert rules.format_hm(0.5) == "0:30"
+    assert rules.format_hm(0) == "0:00" and rules.format_hm(None) == "0:00"
+    assert rules.format_hm(341.2) == "341:12"  # totals can exceed 24 h
+    assert rules.format_hm(19.0) == "19:00"
