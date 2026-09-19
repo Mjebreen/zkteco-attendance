@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ t('my_account') }} — {{ company }}{% endblock %}
+{% block content %}
+<div class="pagehead">
+  <div>
+    <h1>{{ t('my_account') }}</h1>
+    <div class="sub">{{ user.email }} · {{ t('role_admin') if user.is_admin else t('role_hr') }}</div>
+  </div>
+  <div class="actions"><a class="btn ghost" href="/">← {{ t('back_dashboard') }}</a></div>
+</div>
+
+{% if msg == 'saved' %}<div class="notice ok">{{ t('password_changed') }}</div>
+{% elif msg and msg.startswith('err:') %}<div class="notice bad">{{ t('error') }}: {{ t(msg[4:]) }}</div>{% endif %}
+
+<section class="box" style="max-width:520px">
+  <h2>{{ t('change_password') }}</h2>
+  {% if user.legacy %}
+  <div class="empty">{{ t('legacy_no_account') }}</div>
+  {% else %}
+  <form method="post" action="/account/password" autocomplete="off">
+    <div class="form-inline" style="flex-direction:column;align-items:stretch">
+      <input type="password" name="current_password" placeholder="{{ t('current_password') }}" required autocomplete="current-password" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)">
+      <input type="password" name="new_password" placeholder="{{ t('new_password') }} (8+)" required minlength="8" autocomplete="new-password" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)">
+      <input type="password" name="confirm_password" placeholder="{{ t('confirm_password') }}" required minlength="8" autocomplete="new-password" style="padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)">
+      <button class="btn" type="submit" style="justify-content:center">{{ t('change_password') }}</button>
+    </div>
+  </form>
+  <div class="sub" style="margin-top:10px">{{ t('password_change_hint') }}</div>
+  {% endif %}
+</section>
+{% endblock %}

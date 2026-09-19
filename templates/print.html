@@ -68,6 +68,7 @@
 
   <div class="page">
     <div class="letterhead">
+      {% if brand and brand.has_logo %}<img src="{{ brand.logo_url }}" alt="" style="max-height:16mm;max-width:60mm;object-fit:contain;display:block;margin-bottom:3mm">{% endif %}
       <h1>{{ company }}</h1>
       <div class="tag">{{ t('attendance_report') }}{% if department_name %} · {{ department_name }}{% endif %}</div>
     </div>

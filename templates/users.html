@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}{{ t('users') }} — {{ company }}{% endblock %}
+{% block content %}
+<div class="pagehead">
+  <div>
+    <h1>{{ t('users') }}</h1>
+    <div class="sub">{{ t('users_hint') }}</div>
+  </div>
+  <div class="actions"><a class="btn ghost" href="/audit">{{ t('audit_log') }}</a><a class="btn ghost" href="/">← {{ t('back_dashboard') }}</a></div>
+</div>
+
+{% if msg == 'saved' %}<div class="notice ok">{{ t('saved') }}</div>
+{% elif msg and msg.startswith('err:') %}<div class="notice bad">{{ t('error') }}: {{ t(msg[4:]) }}</div>{% endif %}
+
+<section class="box">
+  <h2>{{ t('add_user') }}</h2>
+  <form class="form-inline" method="post" action="/users" autocomplete="off">
+    <input type="text" name="email" placeholder="{{ t('email') }}" required inputmode="email" autocomplete="off">
+    <input type="text" name="name" placeholder="{{ t('full_name') }}" autocomplete="off">
+    <select name="role">
+      <option value="hr">{{ t('role_hr') }}</option>
+      <option value="admin">{{ t('role_admin') }}</option>
+    </select>
+    <input type="password" name="password" placeholder="{{ t('password') }} (8+)" required minlength="8" autocomplete="new-password" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)">
+    <button class="btn" type="submit">+ {{ t('add_user') }}</button>
+  </form>
+  <div class="sub" style="margin-top:10px">{{ t('roles_hint') }}</div>
+</section>
+
+<section class="box">
+  <h2>{{ t('accounts') }} <span class="pill">{{ app_users|length }}</span></h2>
+  {% for u in app_users %}
+    <form method="post" action="/users/{{ u.id }}" id="usr-{{ u.id }}" hidden></form>
+    <form method="post" action="/users/{{ u.id }}/password" id="pwd-{{ u.id }}" hidden></form>
+  {% endfor %}
+  <div class="tbl"><table>
+    <thead><tr><th>{{ t('email') }}</th><th>{{ t('full_name') }}</th><th>{{ t('role') }}</th><th>{{ t('status') }}</th><th>{{ t('last_login') }}</th><th></th><th>{{ t('reset_password') }}</th></tr></thead>
+    <tbody>
+    {% for u in app_users %}
+      <tr>
+        <td class="name">{{ u.email }}{% if user and user.id == u.id %} <span class="pill info">{{ t('you') }}</span>{% endif %}</td>
+        <td><input form="usr-{{ u.id }}" type="text" name="name" value="{{ u.name or '' }}" maxlength="255" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);min-width:140px"></td>
+        <td>
+          <select form="usr-{{ u.id }}" name="role" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)">
+            <option value="hr" {{ 'selected' if u.role == 'hr' else '' }}>{{ t('role_hr') }}</option>
+            <option value="admin" {{ 'selected' if u.role == 'admin' else '' }}>{{ t('role_admin') }}</option>
+          </select>
+        </td>
+        <td>
+          <select form="usr-{{ u.id }}" name="active" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)">
+            <option value="1" {{ 'selected' if u.active else '' }}>{{ t('active') }}</option>
+            <option value="0" {{ 'selected' if not u.active else '' }}>{{ t('disabled') }}</option>
+          </select>
+        </td>
+        <td class="mono">{{ u.last_login_at.strftime('%Y-%m-%d %H:%M') if u.last_login_at else '—' }}</td>
+        <td><button form="usr-{{ u.id }}" class="btn sm" type="submit">{{ t('save') }}</button></td>
+        <td>
+          <span class="form-inline">
+            <input form="pwd-{{ u.id }}" type="password" name="password" placeholder="{{ t('new_password') }}" minlength="8" required autocomplete="new-password" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);min-width:130px">
+            <button form="pwd-{{ u.id }}" class="btn ghost sm" type="submit">{{ t('reset') }}</button>
+          </span>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

@@ -19,8 +19,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from app import i18n, rules, service
-from app.auth import require_dashboard_auth
+from app import branding, i18n, rules, service
+from app.accounts import record_audit
+from app.auth import client_ip, current_user, require_dashboard_auth
 from app.config import Settings, get_settings
 from app.dates import resolve_range, today
 from app.db import get_db
@@ -32,6 +33,30 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 router = APIRouter(dependencies=[Depends(require_dashboard_auth)])
 
 LANG_COOKIE = "lang"
+KIND_LABEL = {"work": "working day", "off": "day off", "online": "online", "vacation": "vacation", "auto": "auto"}
+WEEKDAY_EN = i18n.WEEKDAYS["en"]
+
+
+def _audit(request: Request, db: Session, action: str, summary: str, target: str | None = None, **details: Any) -> None:
+    record_audit(db, current_user(request), action, summary, target=target, details=details or None, ip=client_ip(request))
+
+
+def _emp_label(db: Session, user_id: str) -> str:
+    emp = service.get_employee(db, user_id)
+    return f"{emp.name} ({user_id})" if emp else f"employee {user_id}"
+
+
+def _pattern_text(pattern: dict[int, str]) -> str:
+    return ", ".join(f"{WEEKDAY_EN[wd]}={KIND_LABEL.get(k, k)}" for wd, k in sorted(pattern.items())) or "all working days"
+
+
+def _scope_text(db: Session, scope: str) -> str:
+    if scope == "none":
+        return "employees without a department"
+    if scope.isdigit():
+        dept = next((d for d in service.list_departments(db) if d.id == int(scope)), None)
+        return f"department {dept.name}" if dept else f"department #{scope}"
+    return "all employees"
 
 
 # --------------------------------------------------------------------------- #
@@ -132,7 +157,9 @@ def _base_context(request: Request, db: Session, settings: Settings, page: str) 
     departments = service.list_departments(db)
     dept_id = _dept_id(request)
     dept = next((d for d in departments if d.id == dept_id), None)
+    brand = branding.load(db, settings)
     return {
+        "brand": brand,
         "request": request,
         "page": page,
         "lang": lang,
@@ -141,7 +168,7 @@ def _base_context(request: Request, db: Session, settings: Settings, page: str) 
         "fmt_date": lambda d, style="long": i18n.fmt_date(d, lang, style),
         "lang_switch_url": _url_with(request, lang=other),
         "url_with": lambda **kw: _url_with(request, **kw),
-        "company": settings.company_name,
+        "company": brand.company_name,
         "device": settings.device_label,
         "shift_label": _shift_label(settings, lang),
         "target_hours": settings.target_hours,
@@ -153,6 +180,7 @@ def _base_context(request: Request, db: Session, settings: Settings, page: str) 
         "departments": departments,
         "department_id": dept.id if dept else None,
         "department_name": dept.name if dept else None,
+        "user": current_user(request),
         "msg": request.query_params.get("msg"),
         "synced": request.query_params.get("synced"),
         "sync_error": request.query_params.get("sync_error"),
@@ -385,6 +413,7 @@ def export_csv(request: Request, db: Session = Depends(get_db), settings: Settin
             ])
         filename = f"attendance_{from_date:%Y-%m-%d}_to_{to_date:%Y-%m-%d}.csv"
     data = "﻿" + buf.getvalue()  # BOM so Excel opens UTF-8 (Arabic names) correctly
+    _audit(request, db, "export.csv", f"Exported CSV {filename}", department=dept_id)
     return Response(
         content=data,
         media_type="text/csv; charset=utf-8",
@@ -548,7 +577,12 @@ async def save_weekly_pattern(user_id: str, request: Request, db: Session = Depe
         raise HTTPException(404, "employee not found")
     form = await request.form()
     pattern = {wd: str(form.get(f"wd{wd}") or "work") for wd in range(7)}
+    before = service.get_weekly_pattern(db, user_id)
     service.set_weekly_pattern(db, user_id, pattern)
+    after = service.get_weekly_pattern(db, user_id)
+    if after != before:
+        _audit(request, db, "schedule.weekly", f"Weekly pattern for {_emp_label(db, user_id)}: {_pattern_text(after)}",
+               target=f"employee:{user_id}", before=_pattern_text(before), after=_pattern_text(after))
     return _employee_redirect(user_id, str(form.get("month") or ""), "saved")
 
 
@@ -574,8 +608,16 @@ async def save_day_override(user_id: str, request: Request, db: Session = Depend
             service.move_day_off(db, user_id, day, target, note)
         except service.ValidationError as exc:
             return _employee_redirect(user_id, month, f"err:{exc}")
+        _audit(request, db, "schedule.move", f"Moved day off for {_emp_label(db, user_id)} from {day} to {target}",
+               target=f"employee:{user_id}", from_day=str(day), to_day=str(target), note=note or None)
     else:
-        service.set_day_override(db, user_id, day, kind if kind in service.OVERRIDE_KINDS else None, note)
+        before = service.load_day_types(db, day, day, [user_id]).get(user_id, {}).get(day, "work")
+        chosen = kind if kind in service.OVERRIDE_KINDS else None
+        service.set_day_override(db, user_id, day, chosen, note)
+        after = service.load_day_types(db, day, day, [user_id]).get(user_id, {}).get(day, "work")
+        verb = f"set to {KIND_LABEL.get(chosen, chosen)}" if chosen else "reset to the weekly pattern"
+        _audit(request, db, "schedule.day", f"{day} for {_emp_label(db, user_id)} {verb}",
+               target=f"employee:{user_id}", day=str(day), before=before, after=after, note=note or None)
     return _employee_redirect(user_id, month, "saved")
 
 
@@ -595,18 +637,26 @@ async def add_employee_vacation(user_id: str, request: Request, db: Session = De
     start, end = _form_date(form.get("start")), _form_date(form.get("end") or form.get("start"))
     if start is None or end is None:
         return _employee_redirect(user_id, month, "err:bad_date")
+    note = str(form.get("note") or "")
     try:
-        service.add_vacation(db, [user_id], start, end, str(form.get("note") or ""))
+        service.add_vacation(db, [user_id], start, end, note)
     except service.ValidationError as exc:
         return _employee_redirect(user_id, month, f"err:{exc}")
+    _audit(request, db, "vacation.add", f"Added vacation {start} \u2192 {end} for {_emp_label(db, user_id)}",
+           target=f"employee:{user_id}", start=str(start), end=str(end), days=(end - start).days + 1, note=note or None)
     return _employee_redirect(user_id, month or start.strftime("%Y-%m"), "saved")
 
 
 @router.post("/employee/{user_id}/vacations/{vacation_id}/delete")
 async def delete_employee_vacation(user_id: str, vacation_id: int, request: Request, db: Session = Depends(get_db)):
     form = await request.form()
+    vac = next((v for v in service.list_vacations(db, user_id) if v.id == vacation_id), None)
+    info = {"start": str(vac.start_day), "end": str(vac.end_day), "note": vac.note} if vac else {}
     if not service.delete_vacation(db, user_id, vacation_id):
         raise HTTPException(404, "vacation not found")
+    _audit(request, db, "vacation.delete",
+           f"Deleted vacation {info.get('start')} \u2192 {info.get('end')} for {_emp_label(db, user_id)}",
+           target=f"employee:{user_id}", **info)
     return _employee_redirect(user_id, str(form.get("month") or ""), "deleted")
 
 
@@ -632,6 +682,10 @@ def vacation_bulk(
         service.add_vacation(db, [u.user_id for u in users], start_day, end_day, note)
     except service.ValidationError as exc:
         return _settings_redirect(request, f"err:{exc}")
+    _audit(request, db, "vacation.bulk",
+           f"Added vacation {start_day} \u2192 {end_day} for {_scope_text(db, scope)} ({len(users)} employees)",
+           target=f"scope:{scope}", start=str(start_day), end=str(end_day), note=note or None,
+           employees=[u.user_id for u in users])
     return _settings_redirect(request, "saved")
 
 
@@ -653,6 +707,9 @@ def weekly_bulk(
         service.set_weekly_day_bulk(db, [u.user_id for u in users], weekday, kind)
     except service.ValidationError as exc:
         return _settings_redirect(request, f"err:{exc}")
+    _audit(request, db, "schedule.weekly_bulk",
+           f"Every {WEEKDAY_EN[weekday]} = {KIND_LABEL.get(kind, kind)} for {_scope_text(db, scope)} ({len(users)} employees)",
+           target=f"scope:{scope}", weekday=WEEKDAY_EN[weekday], kind=kind, employees=[u.user_id for u in users])
     return _settings_redirect(request, "saved")
 
 
@@ -694,9 +751,10 @@ def _settings_redirect(request: Request, msg: str) -> RedirectResponse:
 @router.post("/settings/departments")
 def add_department(request: Request, name: str = Form(""), db: Session = Depends(get_db)):
     try:
-        service.create_department(db, name)
+        dept = service.create_department(db, name)
     except service.ValidationError as exc:
         return _settings_redirect(request, f"err:{exc}")
+    _audit(request, db, "department.create", f"Created department {dept.name}", target=f"department:{dept.id}")
     return _settings_redirect(request, "saved")
 
 
@@ -704,14 +762,20 @@ def add_department(request: Request, name: str = Form(""), db: Session = Depends
 def edit_department(
     dept_id: int, request: Request, action: str = Form("rename"), name: str = Form(""), db: Session = Depends(get_db)
 ):
+    old = next((d.name for d in service.list_departments(db) if d.id == dept_id), None)
     if action == "delete":
-        service.delete_department(db, dept_id)
+        if service.delete_department(db, dept_id):
+            _audit(request, db, "department.delete", f"Deleted department {old}", target=f"department:{dept_id}")
         return _settings_redirect(request, "deleted")
     try:
-        if service.rename_department(db, dept_id, name) is None:
+        dept = service.rename_department(db, dept_id, name)
+        if dept is None:
             raise HTTPException(404, "department not found")
     except service.ValidationError as exc:
         return _settings_redirect(request, f"err:{exc}")
+    if dept.name != old:
+        _audit(request, db, "department.rename", f"Renamed department {old} \u2192 {dept.name}",
+               target=f"department:{dept_id}", before=old, after=dept.name)
     return _settings_redirect(request, "saved")
 
 
@@ -724,8 +788,17 @@ def edit_employee(
     db: Session = Depends(get_db),
 ):
     dept = int(department_id) if department_id.strip().isdigit() else None
-    if service.update_user_settings(db, user_id, display_name, dept) is None:
+    prev = next((u for u in service.list_users_admin(db, include_inactive=True) if u.user_id == user_id), None)
+    before = {"display_name": prev.display_name, "department": prev.department.name if prev.department else None} if prev else {}
+    updated = service.update_user_settings(db, user_id, display_name, dept)
+    if updated is None:
         raise HTTPException(404, "employee not found")
+    after = {"display_name": updated.display_name, "department": updated.department.name if updated.department else None}
+    if after != before:
+        _audit(request, db, "employee.update", f"Updated {updated.effective_name} ({user_id}): "
+               f"display name {before.get('display_name')!r} \u2192 {after['display_name']!r}, "
+               f"department {before.get('department')!r} \u2192 {after['department']!r}",
+               target=f"employee:{user_id}", before=before, after=after)
     return _settings_redirect(request, "saved")
 
 
@@ -735,10 +808,15 @@ def edit_employee(
 
 
 @router.post("/sync")
-async def sync_from_dashboard(request: Request, settings: Settings = Depends(get_settings)):
+async def sync_from_dashboard(
+    request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)
+):
     """"Sync now" button: run/queue a collector pull. JSON for fetch(), redirect for plain forms."""
     form = await request.form()
     result = await run_in_threadpool(trigger_sync, settings, True)
+    _audit(request, db, "sync.manual",
+           "Manual sync " + ("succeeded" if result.get("ok") else f"failed: {result.get('error')}"),
+           mode=result.get("mode"), records_inserted=result.get("records_inserted"))
     wants_json = "application/json" in request.headers.get("accept", "") or form.get("format") == "json"
     if wants_json:
         return JSONResponse(result, status_code=200 if result.get("ok") else 502)

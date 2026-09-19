@@ -12,3 +12,4 @@ httpx>=0.27
 python-dotenv>=1.0
 arabic-reshaper>=3.0
 python-bidi>=0.4
+pillow>=10

@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}{{ t('audit_log') }} — {{ company }}{% endblock %}
+{% block head %}
+<style>
+  .act{font-family:var(--mono);font-size:12px;padding:2px 7px;border-radius:6px;background:var(--chip);color:var(--muted);white-space:nowrap}
+  .act.login{background:var(--info-soft);color:var(--info)}
+  .act.failed,.act.locked{background:var(--bad-soft);color:var(--bad)}
+  .act.vacation{background:var(--vac-soft);color:var(--vac)}
+  .act.schedule{background:var(--warn-soft);color:var(--warn)}
+  .act.user,.act.password{background:var(--ok-soft);color:var(--ok)}
+  td.det{font-family:var(--mono);font-size:11.5px;color:var(--muted);max-width:340px;word-break:break-word}
+  td.when{white-space:nowrap;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+  .pager{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:12px;color:var(--muted);font-size:13px}
+</style>
+{% endblock %}
+{% block content %}
+<div class="pagehead">
+  <div>
+    <h1>{{ t('audit_log') }} <span class="pill">{{ total }}</span></h1>
+    <div class="sub">{{ t('audit_hint') }}{% if audit_file %} · <span class="mono">{{ audit_file }}</span>{% endif %}</div>
+  </div>
+  <div class="actions">
+    <a class="btn ghost" href="/audit.csv{% if base_qs %}?{{ base_qs }}{% endif %}">{{ t('export_csv') }}</a>
+    <a class="btn ghost" href="/users">{{ t('users') }}</a>
+  </div>
+</div>
+
+<form class="picker" method="get" action="/audit">
+  <input type="search" name="q" value="{{ f.get('q', '') }}" placeholder="{{ t('search') }}…" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);min-width:180px;flex:1">
+  <select name="actor">
+    <option value="">{{ t('everyone_who') }}</option>
+    {% for a in actors %}<option value="{{ a }}" {{ 'selected' if f.get('actor') == a else '' }}>{{ a }}</option>{% endfor %}
+  </select>
+  <select name="action">
+    <option value="">{{ t('all_actions') }}</option>
+    {% for g in action_groups %}<option value="{{ g }}" {{ 'selected' if f.get('action') == g else '' }}>{{ g }}</option>{% endfor %}
+  </select>
+  <span class="lbl">{{ t('from') }}</span><input type="date" name="from" value="{{ f.get('from', '') }}">
+  <span class="lbl">{{ t('to') }}</span><input type="date" name="to" value="{{ f.get('to', '') }}">
+  <button class="btn" type="submit">{{ t('show') }}</button>
+  <a class="btn ghost sm" href="/audit">{{ t('reset') }}</a>
+</form>
+
+<section class="box">
+  {% if entries %}
+  <div class="tbl"><table>
+    <thead><tr><th>{{ t('when') }}</th><th>{{ t('who') }}</th><th>{{ t('action') }}</th><th>{{ t('what') }}</th><th>{{ t('details') }}</th><th>IP</th></tr></thead>
+    <tbody>
+    {% for e in entries %}
+      {% set grp = e.action.split('.')[0] %}{% set sub = e.action.split('.')[-1] %}
+      <tr>
+        <td class="when">{{ e.ts.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td class="name">{{ e.actor }}</td>
+        <td><span class="act {{ grp }} {{ sub }}">{{ e.action }}</span></td>
+        <td>{{ e.summary }}</td>
+        <td class="det">{{ e.details or '' }}</td>
+        <td class="mono">{{ e.ip or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <div class="pager">
+    {% if page > 1 %}<a class="btn ghost sm" href="/audit?{{ base_qs }}{{ '&' if base_qs else '' }}page={{ page - 1 }}">← {{ t('prev') }}</a>{% endif %}
+    <span>{{ t('page') }} {{ page }} {{ t('of') }} {{ pages }}</span>
+    {% if page < pages %}<a class="btn ghost sm" href="/audit?{{ base_qs }}{{ '&' if base_qs else '' }}page={{ page + 1 }}">{{ t('next') }} →</a>{% endif %}
+  </div>
+  {% else %}
+  <div class="empty">{{ t('no_audit') }}</div>
+  {% endif %}
+</section>
+{% endblock %}

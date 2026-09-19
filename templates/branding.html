@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ t('branding') }} — {{ company }}{% endblock %}
+{% block head %}
+<style>
+  .bform{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px 20px}
+  .bform label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:.04em}
+  .bform input[type=text],.bform select{padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-weight:500;text-transform:none;letter-spacing:0}
+  .bform .hint{font-weight:400;text-transform:none;letter-spacing:0;color:var(--faint);font-size:12px}
+  .colorrow{display:flex;gap:8px;align-items:center}
+  .colorrow input[type=color]{width:46px;height:38px;padding:2px;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer}
+  .colorrow input[type=text]{flex:1;font-family:var(--mono)}
+  .check{flex-direction:row !important;align-items:center;gap:8px !important;text-transform:none !important;letter-spacing:0 !important;font-weight:500 !important;color:var(--text) !important;font-size:13.5px !important}
+  .logobox{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .logobox .cur{height:56px;max-width:220px;object-fit:contain;border:1px dashed var(--border);border-radius:10px;padding:6px;background:var(--bg)}
+  .pv{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:14px;border:1px dashed var(--border);border-radius:10px}
+</style>
+{% endblock %}
+{% block content %}
+<div class="pagehead">
+  <div>
+    <h1>{{ t('branding') }}</h1>
+    <div class="sub">{{ t('branding_hint') }}</div>
+  </div>
+  <div class="actions"><a class="btn ghost" href="/">← {{ t('back_dashboard') }}</a></div>
+</div>
+
+{% if msg == 'saved' %}<div class="notice ok">{{ t('saved') }}</div>
+{% elif msg and msg.startswith('err:') %}<div class="notice bad">{{ t('error') }}: {{ t(msg[4:]) }}</div>{% endif %}
+
+<form method="post" action="/branding" enctype="multipart/form-data">
+  <section class="box">
+    <h2>{{ t('company_name') }} · {{ t('logo') }}</h2>
+    <div class="bform">
+      <label>{{ t('company_name') }}
+        <input type="text" name="company_name" value="{{ brand.company_name }}" maxlength="120" placeholder="{{ env_company }}">
+      </label>
+      <label>{{ t('tagline') }}
+        <input type="text" name="tagline" value="{{ brand.tagline }}" maxlength="160">
+      </label>
+      <label style="grid-column:1 / -1">{{ t('logo') }}
+        <span class="logobox">
+          {% if brand.has_logo %}<img class="cur" src="{{ brand.logo_url }}" alt="">{% endif %}
+          <input type="file" name="logo" accept="image/png,image/jpeg,image/webp,image/gif">
+        </span>
+        <span class="hint">{{ t('logo_hint', kb=max_logo_kb) }}</span>
+      </label>
+      {% if brand.has_logo %}<label class="check"><input type="checkbox" name="remove_logo" value="1"> {{ t('remove_logo') }}</label>{% endif %}
+    </div>
+  </section>
+
+  <section class="box">
+    <h2>{{ t('accent_color') }} · {{ t('default_theme') }}</h2>
+    <div class="bform">
+      <label>{{ t('accent_color') }}
+        <span class="colorrow"><input type="color" id="c1" value="{{ brand.accent }}"><input type="text" name="accent" id="t1" value="{{ brand.accent if brand.custom_accent else '' }}" placeholder="{{ default_accent }}" maxlength="7"></span>
+      </label>
+      <label>{{ t('accent_color_dark') }}
+        <span class="colorrow"><input type="color" id="c2" value="{{ brand.accent_dark }}"><input type="text" name="accent_dark" id="t2" value="" placeholder="{{ brand.accent_dark }}" maxlength="7"></span>
+        <span class="hint">{{ t('accent_dark_hint') }}</span>
+      </label>
+      <label>{{ t('default_theme') }}
+        <select name="default_theme">
+          <option value="auto" {{ 'selected' if brand.default_theme == 'auto' else '' }}>{{ t('theme_auto') }}</option>
+          <option value="light" {{ 'selected' if brand.default_theme == 'light' else '' }}>{{ t('theme_light') }}</option>
+          <option value="dark" {{ 'selected' if brand.default_theme == 'dark' else '' }}>{{ t('theme_dark') }}</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" name="use_default_accent" value="1"> {{ t('use_default_colors') }}</label>
+    </div>
+    <div class="sub" style="margin:16px 0 8px">{{ t('preview') }}</div>
+    <div class="pv" id="pv">
+      <button class="btn" type="button">{{ t('show') }}</button>
+      <button class="btn ghost on" type="button">{{ t('today') }}</button>
+      <span class="pill info">{{ t('department') }}</span>
+      <span class="progress"><span class="bar ok"><div style="width:72%"></div></span></span>
+      <a href="#pv">{{ t('view_profile') }}</a>
+    </div>
+  </section>
+
+  <button class="btn" type="submit">{{ t('save') }}</button>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+  (function(){
+    function link(c,t){c.addEventListener('input',function(){t.value=c.value;paint();});t.addEventListener('input',function(){if(/^#[0-9a-fA-F]{6}$/.test(t.value)){c.value=t.value;paint();}});}
+    var c1=document.getElementById('c1'),t1=document.getElementById('t1'),c2=document.getElementById('c2'),t2=document.getElementById('t2');
+    function paint(){var dark=document.documentElement.getAttribute('data-theme')==='dark';var v=dark?(t2.value||c2.value):(t1.value||c1.value);
+      var pv=document.getElementById('pv');pv.style.setProperty('--accent',v);pv.style.setProperty('--accent-hover',v);pv.style.setProperty('--link',v);}
+    link(c1,t1);link(c2,t2);
+  })();
+</script>
+{% endblock %}

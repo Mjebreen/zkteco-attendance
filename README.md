@@ -64,7 +64,7 @@ Edit `.env` — at minimum:
 | `ZK_IP` | the terminal's LAN IP (device menu: Comm > Ethernet) |
 | `TZ` | the device's local timezone, e.g. `Europe/Berlin` |
 | `API_KEY` | 32 random chars: `python -c "import secrets;print(secrets.token_urlsafe(32))"` |
-| `DASHBOARD_PASSWORD` | a real password (the dashboard refuses to serve without one) |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | your sign-in; the first admin account is created from these on startup |
 | `DAY_START_HOUR` | `7` (already the default) |
 
 Then:
@@ -75,7 +75,7 @@ docker compose logs -f collector       # first pull happens immediately on start
 curl http://localhost:5000/health      # last_sync + record_count should fill in after the first pull
 ```
 
-Open `http://<server-ip>:5000/` (HTTP Basic Auth: `DASHBOARD_USER` / `DASHBOARD_PASSWORD`).
+Open `http://<server-ip>:5000/` and sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`. Add HR users from the **Users** page.
 
 What happens on start: the web container runs the Alembic migrations, becomes healthy, then the
 collector starts, pulls the device and every `POLL_INTERVAL_MINUTES` after that. The **Sync now** button
@@ -94,7 +94,7 @@ instance hosted anywhere. The DB is never exposed; the collector only needs outb
 cp .env.example .env
 # ZK_IP=                  <- leave EMPTY: this instance never touches the device
 # API_KEY=<secret>        <- shared with the collector
-# DASHBOARD_PASSWORD=...
+# ADMIN_EMAIL=... / ADMIN_PASSWORD=...
 # DATABASE_URL=sqlite:////data/attendance.db   (or Postgres, see §3)
 docker compose up -d --build web
 ```
@@ -143,8 +143,8 @@ or manually with `docker compose exec web alembic upgrade head`.
 
 ## 4. Reverse proxy with HTTPS (Caddy or nginx)
 
-The app listens on plain HTTP (port 5000) and already enforces Basic Auth on `/` and `/print` and an
-API key on everything else except `/health`. Terminate TLS in front of it and only expose 80/443.
+The app listens on plain HTTP (port 5000) and already enforces sign-in on every page and an
+API key on the API routes (`/health` is open). Terminate TLS in front of it and only expose 80/443.
 
 **Caddy** (automatic Let's Encrypt) — `deploy/Caddyfile`:
 
@@ -220,6 +220,9 @@ history the device still holds.
 | **Search** | dashboard, settings | filters by name, ID or department as you type. |
 | **Schedules: days off & online days** | `/employee/<id>` (calendar), `/settings` (bulk) | Each employee has a **weekly pattern** (e.g. every Friday off, every Tuesday online) and a month **calendar** where any date can be set to Day off / Online / Working day. A calendar change always wins over the weekly pattern, and "Move this day off to…" swaps a worked day off for another date in one step. Settings has a bulk tool ("every Friday = day off" for everyone or one department). Scheduled days off and online days are **not absences**: they get their own sections on the dashboard, print view and PDF, and the attendance rate is `(present + online) / (days − days off)`. With no schedules defined, nothing changes. `WEEK_START` sets the calendar's first column. |
 | **Vacations** | `/employee/<id>` (Vacations box, or "Vacation" in the day dialog), `/settings` (bulk) | Date ranges with an optional note, shown in purple on the calendar and removable from the list. The bulk tool adds the same period for everyone or one department (public holidays). Priority is single-date change > vacation > weekly pattern. Vacation days are not absences and are excluded from expected days; someone who punches in anyway shows as present with a "Worked during vacation" badge. |
+| **Sign-in & users** | `/login`, `/users`, `/account` | Real accounts with hashed (scrypt) passwords and server-side sessions. The first **admin** comes from `ADMIN_EMAIL` / `ADMIN_PASSWORD`; add **HR** users later on the Users page (or `scripts/create_user.py`). HR can use the dashboard, schedules, vacations and settings; only admins manage users, branding and see the audit log. Disabling a user or changing a password signs them out everywhere. Repeated failed logins are locked out for a few minutes; cross-site POSTs are rejected. |
+| **Audit log** | `/audit` (admins only), `/data/audit.log` | Every sign-in (and failed attempt), sign-out, department / employee edit, weekly pattern, day off / online / vacation change, move, bulk action, manual sync, export, user and branding change: who, when, IP, and before/after values. Filter, search, export CSV. The same lines are appended to a plain-text file: `docker compose exec web tail -f /data/audit.log` (also visible in `docker compose logs web \| grep '"logger": "audit"'`). Passwords are never logged. |
+| **Branding** | `/branding` (admins only) | Company name, login tagline, logo upload (PNG/JPG/WEBP/GIF, stored in the database), accent colours for light and dark mode, and the default theme. Applied to the dashboard, login page, browser tab icon, print view and PDFs. |
 | **Departments** | `/settings` | create/rename/delete departments and assign employees. Stored only in this system's DB; the device is never modified. Dashboard, print view, PDF, CSV and `/summary` accept `?department=<id>`. A "By department" table appears once employees are assigned. |
 | **Display name** | `/settings` | optional override of the device name (e.g. full Arabic name); used everywhere in this system. |
 | **Employee profile** | `/employee/<id>` | stats + every shift day in a range, absences included, with target bars. |
@@ -228,7 +231,7 @@ history the device still holds.
 ## 7. HTTP API
 
 All routes except `/health`, `/` and `/print` require `X-API-Key: <API_KEY>` (or `?api_key=`).
-`/` and `/print` use HTTP Basic Auth (`DASHBOARD_USER` / `DASHBOARD_PASSWORD`).
+Web pages require a signed-in account (session cookie from `/login`); browsers are redirected there, other clients get 401.
 
 | Route | Returns |
 |---|---|
@@ -239,12 +242,12 @@ All routes except `/health`, `/` and `/print` require `X-API-Key: <API_KEY>` (or
 | `GET /summary?from=..&to=..` | `{from, to, days_total, total, avg_present_per_day, total_hours, employees:[{id, name, days_present, days_total, days_absent, total_hours, avg_hours_per_attended_day, attendance_rate}]}` |
 | `POST /api/ingest` | body `{users:[{id,name}], records:[{user_id,timestamp,status,punch}]}` → upsert; returns `{users_created, users_updated, users_deactivated, records_received, records_inserted, records_skipped, record_count, last_sync}` |
 | `POST /api/sync` | immediate collector run: `{mode: "direct", ...ingest counts}` when this instance has `ZK_IP`, else `{mode: "queued"}` |
-| `GET /` | dashboard (Basic Auth); `?department=<id>`, `?lang=ar` |
-| `GET /employee/<id>?from=&to=` | employee profile (Basic Auth) |
-| `GET /settings` | departments + employee assignment (Basic Auth) |
-| `GET /export.csv?date=\|from=&to=` | CSV export (Basic Auth) |
-| `GET /print?from=&to=` | printable A4 report (Basic Auth); `&auto=1` opens the print dialog on load |
-| `POST /sync` | the dashboard's **Sync now** button (Basic Auth); redirects back to the dashboard |
+| `GET /` | dashboard (signed in); `?department=<id>`, `?lang=ar` |
+| `GET /employee/<id>?from=&to=` | employee profile (signed in) |
+| `GET /settings` | departments + employee assignment (signed in) |
+| `GET /export.csv?date=\|from=&to=` | CSV export (signed in) |
+| `GET /print?from=&to=` | printable A4 report (signed in); `&auto=1` opens the print dialog on load |
+| `POST /sync` | the dashboard's **Sync now** button (signed in); redirects back to the dashboard |
 
 `timestamp` values are naive local time (`2026-05-24T03:00:00`); an offset, if sent, is stripped.
 
@@ -301,7 +304,10 @@ See `.env.example` for the full list with comments.
 | `COLLECTOR_TARGET` | `db` | `db` (write direct) or `http` (push to `INGEST_URL`) |
 | `INGEST_URL` | — | base URL of the web instance when `COLLECTOR_TARGET=http` |
 | `SERVER_PORT` | `5000` | web listen port |
-| `DASHBOARD_USER`, `DASHBOARD_PASSWORD` | `admin`, — | Basic Auth for `/` and `/print`; password is mandatory |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | — | first admin account, created on startup if missing (never overwritten) |
+| `SESSION_DAYS`, `COOKIE_SECURE` | `7`, `false` | sign-in lifetime; force the Secure cookie flag (automatic behind HTTPS) |
+| `AUDIT_LOG_FILE` | `/data/audit.log` | plain-text copy of the audit log; empty disables the file |
+| `DASHBOARD_USER`, `DASHBOARD_PASSWORD` | `admin`, — | legacy HTTP Basic login for scripts (HR role); leave the password empty to disable |
 | `OUTPUT_DIR` | `/data/reports` | PDFs are written here, then served |
 | `LOG_FORMAT`, `LOG_LEVEL` | `json`, `INFO` | structured logs on stdout |
 | `AUTO_MIGRATE` | `true` | run Alembic on start |

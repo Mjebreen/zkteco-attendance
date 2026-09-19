@@ -104,7 +104,12 @@ class Settings:
     server_host: str
     server_port: int
     dashboard_user: str
-    dashboard_password: str
+    dashboard_password: str  # legacy HTTP Basic; empty = disabled
+    admin_email: str  # first admin account, created on startup if it does not exist
+    admin_password: str
+    session_days: int
+    cookie_secure: bool
+    audit_log_file: str  # "" = database + stdout only
     log_format: str  # "json" | "text"
     log_level: str
 
@@ -154,6 +159,11 @@ def load_settings() -> Settings:
         server_port=_int(os.getenv("SERVER_PORT"), 5000),
         dashboard_user=os.getenv("DASHBOARD_USER") or "admin",
         dashboard_password=os.getenv("DASHBOARD_PASSWORD") or "",
+        admin_email=(os.getenv("ADMIN_EMAIL") or "").strip().lower(),
+        admin_password=os.getenv("ADMIN_PASSWORD") or "",
+        session_days=max(1, _int(os.getenv("SESSION_DAYS"), 7)),
+        cookie_secure=_bool(os.getenv("COOKIE_SECURE"), False),
+        audit_log_file=(os.getenv("AUDIT_LOG_FILE") if os.getenv("AUDIT_LOG_FILE") is not None else "/data/audit.log").strip(),
         log_format=(os.getenv("LOG_FORMAT") or "json").strip().lower(),
         log_level=(os.getenv("LOG_LEVEL") or "INFO").strip().upper(),
     )

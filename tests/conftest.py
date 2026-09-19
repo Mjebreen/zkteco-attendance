@@ -29,6 +29,9 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv(k, v)
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path.as_posix()}")
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setenv("AUDIT_LOG_FILE", str(tmp_path / "audit.log"))
+    monkeypatch.delenv("ADMIN_EMAIL", raising=False)
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
 
     from app import config, db
 

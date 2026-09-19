@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app import pdf, service
+from app import branding, pdf, service
 from app.auth import require_api_key
 from app.config import Settings, get_settings
 from app.dates import resolve_range
@@ -58,7 +58,7 @@ def health(db: Session = Depends(get_db), settings: Settings = Depends(get_setti
     return {
         "status": "ok",
         "device": settings.device_label or None,
-        "company": settings.company_name,
+        "company": branding.load(db, settings).company_name,
         "last_sync": last_sync.isoformat(timespec="seconds") if last_sync else None,
         "last_attempt": state.last_attempt.isoformat(timespec="seconds") if state and state.last_attempt else None,
         "last_error": state.last_error if state else None,
@@ -108,17 +108,20 @@ def report(
     out_dir = settings.output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix = (f"_dept{dept_id}" if dept_id else "") + (f"_{lang}" if lang != "en" else "")
+    brand = branding.load(db, settings)
+    logo = branding.get_logo(db)
+    logo_bytes = logo[0] if logo else None
 
     if from_date == to_date:
         rep = service.build_daily(db, from_date, settings.day_start_hour, dept_id)
         filename = f"attendance_{from_date:%Y-%m-%d}{suffix}.pdf"
         path = out_dir / filename
-        pdf.build_daily_pdf(str(path), settings.company_name, rep, lang)
+        pdf.build_daily_pdf(str(path), brand.company_name, rep, lang, logo_bytes)
     else:
         rep = service.build_range(db, from_date, to_date, settings.day_start_hour, dept_id)
         filename = f"attendance_{from_date:%Y-%m-%d}_to_{to_date:%Y-%m-%d}{suffix}.pdf"
         path = out_dir / filename
-        pdf.build_range_pdf(str(path), settings.company_name, rep, lang)
+        pdf.build_range_pdf(str(path), brand.company_name, rep, lang, logo_bytes)
 
     return FileResponse(
         path,

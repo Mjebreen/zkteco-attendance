@@ -6,6 +6,7 @@ Optional Department column, English/Arabic labels, and proper Arabic shaping
 
 from __future__ import annotations
 
+import io
 import logging
 import re
 from datetime import date
@@ -17,7 +18,8 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.lib.utils import ImageReader
+from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from app.i18n import fmt_date, t
 from app.rules import DailyReport, RangeReport, format_hm
@@ -150,6 +152,31 @@ def _table(rows: list[list[str]], col_widths: list[float], header_bg, zebra, fon
     return t_
 
 
+def _logo_flowables(logo: bytes | None) -> list:
+    """Centered logo (max 60 x 18 mm) when the admin uploaded one; silently skipped if unreadable."""
+    if not logo:
+        return []
+    try:
+        from PIL import Image as PILImage
+
+        # Decode fully now (ReportLab reads lazily at build time) and hand over a clean PNG,
+        # which also covers WEBP / GIF uploads.
+        with PILImage.open(io.BytesIO(logo)) as src:
+            src.load()
+            clean = io.BytesIO()
+            src.convert("RGBA").save(clean, format="PNG")
+        clean.seek(0)
+        width, height = ImageReader(clean).getSize()
+        clean.seek(0)
+        scale = min((60 * mm) / width, (18 * mm) / height)
+        img = Image(clean, width=width * scale, height=height * scale)
+        img.hAlign = "CENTER"
+        return [img, Spacer(1, 3 * mm)]
+    except Exception as exc:  # unsupported / corrupt image must never break the report
+        log.warning("could not place the logo on the PDF", extra={"ctx_error": str(exc)})
+        return []
+
+
 def _window_paragraph(day_start_hour: int, style, lang: str) -> Paragraph | None:
     if not day_start_hour:
         return None
@@ -162,14 +189,15 @@ def _has_departments(rows) -> bool:
     return any(getattr(e, "department", None) for e in rows)
 
 
-def build_daily_pdf(output_path: str, company: str, report: DailyReport, lang: str = "en") -> None:
+def build_daily_pdf(output_path: str, company: str, report: DailyReport, lang: str = "en",
+                    logo: bytes | None = None) -> None:
     st = _styles(lang)
     rtl = lang == "ar"
     target_date: date = report.target_date
     present, absent = report.present, report.absent
     with_dept = _has_departments(report.employees)
 
-    story = [
+    story = _logo_flowables(logo) + [
         Paragraph(_shape(company), st["title"]),
         Paragraph(_shape(f"{t(lang, 'daily_report')} \u2014 {fmt_date(target_date, lang, 'long')}"), st["subtitle"]),
     ]
@@ -233,13 +261,14 @@ def build_daily_pdf(output_path: str, company: str, report: DailyReport, lang: s
     _doc(output_path, f"Attendance {target_date.isoformat()}").build(story)
 
 
-def build_range_pdf(output_path: str, company: str, report: RangeReport, lang: str = "en") -> None:
+def build_range_pdf(output_path: str, company: str, report: RangeReport, lang: str = "en",
+                    logo: bytes | None = None) -> None:
     st = _styles(lang)
     rtl = lang == "ar"
     f, to = report.from_date, report.to_date
     with_dept = _has_departments(report.employees)
 
-    story = [
+    story = _logo_flowables(logo) + [
         Paragraph(_shape(company), st["title"]),
         Paragraph(
             _shape(

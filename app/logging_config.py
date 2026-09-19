@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -22,6 +23,26 @@ class JsonFormatter(logging.Formatter):
         if record.exc_info:
             payload["exc"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str)
+
+
+def setup_audit_file(path: str) -> None:
+    """Mirror every audit entry into a plain-text file (tail -f friendly). Idempotent."""
+    audit = logging.getLogger("audit")
+    audit.setLevel(logging.INFO)
+    if not path:
+        return
+    target = os.path.abspath(path)
+    for h in audit.handlers:
+        if isinstance(h, logging.FileHandler) and os.path.abspath(h.baseFilename) == target:
+            return
+    try:
+        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        handler = logging.FileHandler(target, encoding="utf-8")
+    except OSError as exc:
+        logging.getLogger("app").warning("audit log file unavailable", extra={"ctx_path": path, "ctx_error": str(exc)})
+        return
+    handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    audit.addHandler(handler)
 
 
 def setup_logging(fmt: str = "json", level: str = "INFO") -> None:

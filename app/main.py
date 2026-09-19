@@ -6,12 +6,17 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from urllib.parse import quote
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.api import router as api_router
+from app.auth import LoginRequired
 from app.config import get_settings
-from app.logging_config import setup_logging
+from app.logging_config import setup_audit_file, setup_logging
 from app.web import router as web_router
+from app.web_admin import admin_router, public_router
 
 log = logging.getLogger("app")
 
@@ -25,6 +30,17 @@ async def _lifespan(app: FastAPI):
 
         run_migrations()
     settings.output_dir.mkdir(parents=True, exist_ok=True)
+    setup_audit_file(settings.audit_log_file)
+    if settings.admin_email and settings.admin_password:
+        from app.accounts import bootstrap_admin
+        from app.db import session_scope
+
+        try:
+            with session_scope() as session:
+                if bootstrap_admin(session, settings.admin_email, settings.admin_password):
+                    log.info("created admin account from ADMIN_EMAIL", extra={"ctx_email": settings.admin_email})
+        except Exception as exc:  # e.g. password too short
+            log.error("could not create the admin account", extra={"ctx_error": str(exc)})
     log.info(
         "web service ready",
         extra={
@@ -41,7 +57,18 @@ async def _lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="ZKTeco Attendance", docs_url=None, redoc_url=None, lifespan=_lifespan)
     app.include_router(api_router)
+    app.include_router(public_router)
     app.include_router(web_router)
+    app.include_router(admin_router)
+
+    @app.exception_handler(LoginRequired)
+    async def _login_required(request: Request, _exc: LoginRequired):
+        wants_html = "text/html" in request.headers.get("accept", "")
+        if request.method == "GET" and wants_html:
+            target = request.url.path + (("?" + request.url.query) if request.url.query else "")
+            return RedirectResponse(url="/login?next=" + quote(target, safe=""), status_code=303)
+        return JSONResponse({"detail": "Authentication required"}, status_code=401)
+
     return app
 
 
