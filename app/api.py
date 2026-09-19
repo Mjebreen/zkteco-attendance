@@ -166,6 +166,7 @@ def summary(
                     "hours": round(e.hours_worked, 2),
                     "hours_hm": format_hm(e.hours_worked),
                     "day_type": e.day_type,
+                    "corrected": e.corrected,
                     "attended": e.attended,
                 }
                 for e in rep.employees

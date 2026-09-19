@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}{{ t('trends') }} — {{ company }}{% endblock %}
+{% block head %}
+<style>
+  .chart{width:100%;height:190px;display:block}
+  .chart .grid{stroke:var(--border);stroke-width:1}
+  .chart .line{fill:none;stroke:var(--accent);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
+  .chart .area{fill:var(--accent);opacity:.12}
+  .chart .dot{fill:var(--accent)}
+  .chart text{fill:var(--faint);font-size:10px;font-family:var(--font)}
+  .bars{display:flex;align-items:flex-end;gap:3px;height:150px}
+  .bars .b{flex:1;min-width:3px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;position:relative}
+  .bars .b i{display:block;width:100%;background:var(--info);border-radius:3px 3px 0 0;min-height:1px}
+  .bars .b.hot i{background:var(--accent)}
+  .bars .b span{font-size:10px;color:var(--faint);margin-top:4px;white-space:nowrap}
+  .bars .b:hover i{opacity:.75}
+  .two{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+  .two .box{margin-bottom:0}
+  .rank{display:flex;flex-direction:column;gap:8px}
+  .rank .r{display:flex;align-items:center;gap:10px}
+  .rank .r a{flex:1;color:var(--text);font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+</style>
+{% endblock %}
+{% block content %}
+<div class="pagehead">
+  <div>
+    <h1>{{ t('trends') }}{% if department_name %} <span class="pill info">{{ department_name }}</span>{% endif %}</h1>
+    <div class="sub">{{ from_pretty }} → {{ to_pretty }} · {{ days_total }} {{ t('days') }} · {{ kpi.employees }} {{ t('employees')|lower }}</div>
+  </div>
+  <div class="actions"><a class="btn ghost" href="/?from={{ from_date }}&to={{ to_date }}{% if department_id %}&department={{ department_id }}{% endif %}">{{ t('attendance_summary') }}</a></div>
+</div>
+
+<form class="picker" method="get" action="/trends">
+  <span class="lbl">{{ t('from') }}</span><input type="date" name="from" value="{{ from_date }}">
+  <span class="sep">→</span>
+  <span class="lbl">{{ t('to') }}</span><input type="date" name="to" value="{{ to_date }}">
+  {% if departments %}
+  <select name="department">
+    <option value="">{{ t('all_departments') }}</option>
+    {% for d in departments %}<option value="{{ d.id }}" {{ 'selected' if department_id == d.id else '' }}>{{ d.name }}</option>{% endfor %}
+  </select>
+  {% endif %}
+  <button class="btn" type="submit">{{ t('show') }}</button>
+  <span class="quick">
+    <a class="btn ghost sm" href="{{ url_with(**{'range': 7, 'from': None, 'to': None}) }}">{{ t('last_7') }}</a>
+    <a class="btn ghost sm" href="{{ url_with(**{'range': 30, 'from': None, 'to': None}) }}">{{ t('last_30') }}</a>
+    <a class="btn ghost sm" href="{{ url_with(**{'range': 90, 'from': None, 'to': None}) }}">{{ t('last_90') }}</a>
+  </span>
+</form>
+
+<div class="summary">
+  <div class="card ok"><div class="lbl">{{ t('avg_attendance') }}</div><div class="val">{{ (kpi.avg_rate*100)|int }}%</div><div class="vsub">{{ t('avg_present_day') }}: {{ '%.1f'|format(kpi.avg_present) }}</div></div>
+  <div class="card info"><div class="lbl">{{ t('avg_hrs_day') }}</div><div class="val">{{ kpi.avg_hours|hm }}</div><div class="vsub">{{ t('target_hours', h=target_hours|round(1)|string|replace('.0','')) }}</div></div>
+  <div class="card bad"><div class="lbl">{{ t('late_arrivals') }}</div><div class="val">{{ kpi.late }}</div><div class="vsub">{{ t('early') }}: {{ kpi.early }}</div></div>
+  <div class="card warn"><div class="lbl">{{ t('missing_checkouts') }}</div><div class="val">{{ kpi.missing_out }}</div><div class="vsub">{{ t('missing_checkouts_hint') }}</div></div>
+  <div class="card"><div class="lbl">{{ t('busiest_arrival') }}</div><div class="val" style="font-size:26px">{{ busiest_hour }}</div></div>
+</div>
+
+<section class="box">
+  <h2>{{ t('attendance_rate_per_day') }}</h2>
+  {% set n = days|length %}
+  <svg class="chart" viewBox="0 0 1000 200" preserveAspectRatio="none" role="img" aria-label="{{ t('attendance_rate_per_day') }}">
+    {% for g in (0, 25, 50, 75, 100) %}<line class="grid" x1="30" x2="1000" y1="{{ 180 - g*1.6 }}" y2="{{ 180 - g*1.6 }}"/><text x="0" y="{{ 184 - g*1.6 }}">{{ g }}%</text>{% endfor %}
+    {% if n > 1 %}
+    <polygon class="area" points="30,180 {% for s in days %}{{ 30 + loop.index0 * 970 / (n-1) }},{{ 180 - s.rate*160 }} {% endfor %}1000,180"/>
+    <polyline class="line" points="{% for s in days %}{{ 30 + loop.index0 * 970 / (n-1) }},{{ 180 - s.rate*160 }} {% endfor %}"/>
+    {% endif %}
+    {% for s in days %}<circle class="dot" r="3.5" cx="{{ 30 + (loop.index0 * 970 / (n-1) if n > 1 else 485) }}" cy="{{ 180 - s.rate*160 }}"><title>{{ fmt_date(s.day, 'short') }}: {{ (s.rate*100)|int }}% ({{ s.present }}/{{ s.expected }})</title></circle>{% endfor %}
+  </svg>
+  <div class="spark-labels"><span>{{ fmt_date(days[0].day, 'short') }}</span><span>{{ fmt_date(days[-1].day, 'short') }}</span></div>
+</section>
+
+<div class="two" style="margin-bottom:16px">
+  <section class="box">
+    <h2>{{ t('avg_hours_per_day') }}</h2>
+    <div class="bars">
+      {% for s in days %}<div class="b{{ ' hot' if target_hours and s.avg_hours >= target_hours else '' }}" title="{{ fmt_date(s.day, 'short') }}: {{ s.avg_hours|hm }}"><i style="height:{{ (s.avg_hours / max_avg_hours * 100)|int }}%"></i></div>{% endfor %}
+    </div>
+    <div class="spark-labels"><span>{{ fmt_date(days[0].day, 'short') }}</span><span>{{ fmt_date(days[-1].day, 'short') }}</span></div>
+  </section>
+  <section class="box">
+    <h2>{{ t('arrival_times') }} <span class="right">{{ t('busiest_arrival') }}: {{ busiest_hour }}</span></h2>
+    <div class="bars">
+      {% for label, count in histogram %}<div class="b{{ ' hot' if count == histogram_max and count else '' }}" title="{{ label }}:00 — {{ count }}"><i style="height:{{ (count / histogram_max * 100)|int }}%"></i><span>{{ label if loop.index0 % 3 == 0 else '' }}</span></div>{% endfor %}
+    </div>
+  </section>
+</div>
+
+<div class="two" style="margin-bottom:16px">
+  <section class="box">
+    <h2>{{ t('by_weekday') }} <span class="right">{{ t('avg_present_day') }}</span></h2>
+    {% set wmax = (weekdays|map(attribute=1)|max) or 1 %}
+    <div class="bars">
+      {% for label, value in weekdays %}<div class="b" title="{{ label }}: {{ '%.1f'|format(value) }}"><i style="height:{{ (value / wmax * 100)|int }}%"></i><span>{{ label }}</span></div>{% endfor %}
+    </div>
+  </section>
+  <section class="box">
+    <h2>{{ t('needs_attention') }}</h2>
+    <div class="two" style="grid-template-columns:1fr 1fr;gap:18px">
+      <div>
+        <div class="sub" style="margin-bottom:8px">{{ t('most_late') }}</div>
+        <div class="rank">{% for p in most_late %}<div class="r"><a href="/employee/{{ p.user_id }}?from={{ from_date }}&to={{ to_date }}">{{ p.name }}</a><span class="chip bad">{{ p.late }}</span></div>{% else %}<div class="sub">—</div>{% endfor %}</div>
+      </div>
+      <div>
+        <div class="sub" style="margin-bottom:8px">{{ t('most_missing_out') }}</div>
+        <div class="rank">{% for p in most_missing_out %}<div class="r"><a href="/employee/{{ p.user_id }}?from={{ from_date }}&to={{ to_date }}">{{ p.name }}</a><span class="chip warn">{{ p.missing_out }}</span></div>{% else %}<div class="sub">—</div>{% endfor %}</div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<section class="box" data-searchable>
+  <h2>{{ t('per_employee') }}</h2>
+  <div class="toolrow"><label class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="search" type="search" placeholder="{{ t('search_placeholder') }}" autocomplete="off"></label></div>
+  <div class="tbl"><table>
+    <thead><tr>
+      <th>{{ t('employee') }}</th>{% if departments %}<th>{{ t('department') }}</th>{% endif %}<th>{{ t('attendance') }}</th>
+      <th class="num">{{ t('days_present') }}</th><th class="num">{{ t('avg_arrival') }}</th><th class="num">{{ t('avg_hrs_day') }}</th>
+      <th class="num">{{ t('target_met') }}</th><th class="num">{{ t('late') }}</th><th class="num">{{ t('early') }}</th><th class="num">{{ t('missing_checkouts') }}</th>
+    </tr></thead>
+    <tbody>
+    {% for p in people %}
+      <tr data-search="{{ (p.name ~ ' ' ~ p.user_id ~ ' ' ~ (p.department or ''))|lower }}">
+        <td class="name"><a href="/employee/{{ p.user_id }}?from={{ from_date }}&to={{ to_date }}">{{ p.name }}</a></td>
+        {% if departments %}<td>{% if p.department %}<span class="dept">{{ p.department }}</span>{% else %}<span class="mono">—</span>{% endif %}</td>{% endif %}
+        <td><span class="progress"><span class="bar {{ 'ok' if p.rate >= 0.9 else ('warn' if p.rate < 0.5 else '') }}"><div style="width:{{ p.rate|pct }}%"></div></span><span class="pct">{{ p.rate|pct }}%</span></span></td>
+        <td class="num">{{ p.days_present }} / {{ p.days_expected }}</td>
+        <td class="num mono">{{ arrival(p.avg_arrival) }}</td>
+        <td class="num">{{ p.avg_hours|hm if p.days_present else '—' }}</td>
+        <td class="num">{{ p.target_met or '—' }}</td>
+        <td class="num">{% if p.late %}<span class="chip bad">{{ p.late }}</span>{% else %}—{% endif %}</td>
+        <td class="num">{% if p.early %}<span class="chip info">{{ p.early }}</span>{% else %}—{% endif %}</td>
+        <td class="num">{% if p.missing_out %}<span class="chip warn">{{ p.missing_out }}</span>{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table><div class="empty noresults hidden">{{ t('no_results') }}</div></div>
+</section>
+{% endblock %}

@@ -158,11 +158,12 @@
             {% elif e.last_out %}<span class="chip ok"><span class="dot"></span>{{ t('checked_out') }} {{ e.last_out|hhmm }}</span>
             {% else %}<span class="chip"><span class="dot"></span>{{ t('no_checkout') }}</span>{% endif %}
             {% if r.flag == 'late' %} <span class="chip bad">{{ t('late') }}</span>{% elif r.flag == 'early' %} <span class="chip info">{{ t('early') }}</span>{% endif %}
+            {% if r.corrected %} <span class="chip warn" title="{{ t('edited_hint') }}">{{ t('edited') }}</span>{% endif %}
             {% if e.day_type == 'off' %} <span class="chip warn">{{ t('worked_day_off') }}</span>{% elif e.day_type == 'vacation' %} <span class="chip vac">{{ t('worked_vacation') }}</span>{% elif e.day_type == 'online' %} <span class="chip info">{{ t('online_day') }}</span>{% endif %}
           </td>
           <td class="mono">{{ e.first_in|hhmmss }}</td>
           <td class="mono">{{ e.last_out|hhmmss }}</td>
-          <td class="num"><span class="hours-val">{{ r.hours|hours }}</span></td>
+          <td class="num"><span class="hours-val">{{ r.hours|hours }}</span> <a class="editlink" href="/employee/{{ e.user_id }}/punches?day={{ from_date }}" title="{{ t('edit_punches') }}">✎</a></td>
           <td><span class="progress"><span class="bar {{ 'ok' if r.progress >= 1 else ('warn' if r.progress < 0.5 else '') }}"><div style="width:{{ (r.progress*100)|int }}%"></div></span><span class="pct">{{ (r.progress*100)|int }}%</span></span></td>
         </tr>
       {% endfor %}
@@ -194,7 +195,7 @@
       <thead><tr><th>{{ t('employee') }}</th><th>{{ t('id') }}</th>{% if departments %}<th>{{ t('department') }}</th>{% endif %}</tr></thead>
       <tbody>
       {% for r in absent_rows %}{% set e = r.e %}
-        <tr data-search="{{ r.search }}"><td class="name"><a href="/employee/{{ e.user_id }}">{{ e.name }}</a></td><td class="mono">{{ e.user_id }}</td>{% if departments %}<td>{% if e.department %}<span class="dept">{{ e.department }}</span>{% else %}<span class="mono">—</span>{% endif %}</td>{% endif %}</tr>
+        <tr data-search="{{ r.search }}"><td class="name"><a href="/employee/{{ e.user_id }}">{{ e.name }}</a> <a class="editlink" href="/employee/{{ e.user_id }}/punches?day={{ from_date }}" title="{{ t('add_punch') }}">✎</a></td><td class="mono">{{ e.user_id }}</td>{% if departments %}<td>{% if e.department %}<span class="dept">{{ e.department }}</span>{% else %}<span class="mono">—</span>{% endif %}</td>{% endif %}</tr>
       {% endfor %}
       </tbody>
     </table><div class="empty noresults hidden">{{ t('no_results') }}</div></div>

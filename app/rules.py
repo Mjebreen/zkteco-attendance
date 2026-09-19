@@ -48,6 +48,7 @@ class EmployeeDay:
     department: str | None = None
     department_id: int | None = None
     day_type: str = "work"  # work | off | online | vacation (from the employee's schedule)
+    corrected: bool = False  # HR added or voided a punch on this shift day
 
     @property
     def attended(self) -> bool:
@@ -189,7 +190,7 @@ def resolve_day_type(d: date, weekly: dict[int, str] | None, overrides: dict[dat
     return "work"
 
 
-def _employee_day(e: Employee, punches: list[datetime], day_type: str = "work") -> EmployeeDay:
+def _employee_day(e: Employee, punches: list[datetime], day_type: str = "work", corrected: bool = False) -> EmployeeDay:
     sorted_p = sorted(punches)
     return EmployeeDay(
         user_id=e.user_id,
@@ -200,6 +201,7 @@ def _employee_day(e: Employee, punches: list[datetime], day_type: str = "work") 
         department=e.department,
         department_id=e.department_id,
         day_type=day_type,
+        corrected=corrected,
     )
 
 
@@ -282,6 +284,7 @@ def daily_report(
     target_date: date,
     day_start_hour: int,
     day_types: dict[str, str] | None = None,
+    corrected: set[str] | None = None,
 ) -> DailyReport:
     """Build the single-day report for the shift day that STARTS on `target_date`.
 
@@ -296,8 +299,10 @@ def daily_report(
             by_user[str(p.user_id)].append(p.timestamp)
 
     day_types = day_types or {}
+    corrected = corrected or set()
     results = [
-        _employee_day(e, by_user.get(e.user_id, []), day_types.get(e.user_id, "work")) for e in employees
+        _employee_day(e, by_user.get(e.user_id, []), day_types.get(e.user_id, "work"), e.user_id in corrected)
+        for e in employees
     ]
     results.sort(key=lambda e: (not e.attended, e.name.lower()))
     return DailyReport(target_date=target_date, day_start_hour=day_start_hour, employees=results)
@@ -310,6 +315,7 @@ def range_report(
     to_date: date,
     day_start_hour: int,
     day_types: dict[str, dict[date, str]] | None = None,
+    corrected: dict[str, set[date]] | None = None,
 ) -> RangeReport:
     """Aggregate across the INCLUSIVE [from_date, to_date] range of shift days."""
     if to_date < from_date:
@@ -329,7 +335,7 @@ def range_report(
         total_hours = 0.0
         schedule = (day_types or {}).get(e.user_id, {})  # only non-"work" dates
         for d, day_punches in by_user_day.get(e.user_id, {}).items():
-            day = _employee_day(e, day_punches, schedule.get(d, "work"))
+            day = _employee_day(e, day_punches, schedule.get(d, "work"), d in (corrected or {}).get(e.user_id, ()))
             per_day[d] = day
             if day.attended:
                 days_present += 1

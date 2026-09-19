@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}{{ t('edit_punches') }} — {{ employee.name }}{% endblock %}
+{% block content %}
+<div class="pagehead">
+  <div>
+    <div class="sub"><a href="/">{{ t('dashboard') }}</a> / <a href="/employee/{{ employee.user_id }}?month={{ day.strftime('%Y-%m') }}#schedule">{{ employee.name }}</a> / {{ t('edit_punches') }}</div>
+    <h1>{{ fmt_date(day, 'long') }}</h1>
+    <div class="sub">{{ employee.name }} · {{ t('id') }} {{ employee.user_id }} · {{ t('shift_window') }}: {{ window_start.strftime('%Y-%m-%d %H:%M') }} → {{ window_end_label }}</div>
+  </div>
+  <div class="actions">
+    <a class="btn ghost" href="/employee/{{ employee.user_id }}/punches?day={{ prev_day }}">← {{ t('prev') }}</a>
+    <a class="btn ghost" href="/employee/{{ employee.user_id }}/punches?day={{ next_day }}">{{ t('next') }} →</a>
+    <a class="btn ghost" href="/?date={{ day.isoformat() }}">{{ t('back_dashboard') }}</a>
+  </div>
+</div>
+
+{% if msg == 'saved' %}<div class="notice ok">{{ t('saved') }}</div>
+{% elif msg == 'deleted' %}<div class="notice ok">{{ t('deleted') }}</div>
+{% elif msg and msg.startswith('err:') %}<div class="notice bad">{{ t('error') }}: {{ t(msg[4:]) }}</div>{% endif %}
+
+<div class="summary">
+  <div class="card"><div class="lbl">{{ t('first_in') }}</div><div class="val" style="font-size:24px">{{ result.first_in|hhmmss }}</div></div>
+  <div class="card"><div class="lbl">{{ t('last_out') }}</div><div class="val" style="font-size:24px">{{ result.last_out|hhmmss }}</div></div>
+  <div class="card info"><div class="lbl">{{ t('hours') }}</div><div class="val">{{ result.hours_worked|hours }}</div></div>
+  <div class="card"><div class="lbl">{{ t('punches') }}</div><div class="val">{{ result.punches }}</div>{% if result.corrected %}<div class="vsub"><span class="chip warn">{{ t('edited') }}</span></div>{% endif %}</div>
+</div>
+
+<section class="box">
+  <h2>{{ t('add_punch') }}</h2>
+  <div class="sub" style="margin-bottom:12px">{{ t('add_punch_hint') }}</div>
+  <form class="form-inline" method="post" action="/employee/{{ employee.user_id }}/punches">
+    <input type="hidden" name="day" value="{{ day.isoformat() }}">
+    <input type="datetime-local" name="ts" required step="1" min="{{ window_start.strftime('%Y-%m-%dT%H:%M') }}" max="{{ window_max }}" value="{{ suggested }}" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)">
+    <input type="text" name="note" placeholder="{{ t('reason_required') }}" required maxlength="255" style="flex:1;min-width:220px">
+    <button class="btn" type="submit">+ {{ t('add_punch') }}</button>
+  </form>
+</section>
+
+<section class="box">
+  <h2>{{ t('punches') }} <span class="pill">{{ rows|length }}</span></h2>
+  {% if rows %}
+  <div class="tbl"><table>
+    <thead><tr><th>{{ t('when') }}</th><th>{{ t('source') }}</th><th>{{ t('status') }}</th><th>{{ t('note') }}</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td class="mono" style="{{ 'text-decoration:line-through;opacity:.6' if r.voided else '' }}">{{ r.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td>{% if r.source == 'manual' %}<span class="chip warn">{{ t('manual') }}</span>{% else %}<span class="chip">{{ t('device') }}</span>{% endif %}</td>
+        <td>{% if r.voided %}<span class="chip bad">{{ t('ignored') }}</span>{% else %}<span class="chip ok">{{ t('counted') }}</span>{% endif %}</td>
+        <td>{{ r.note }}{% if r.by %} <span class="sub">— {{ r.by }}</span>{% endif %}</td>
+        <td class="num">
+          {% if r.source == 'manual' %}
+            <form method="post" action="/employee/{{ employee.user_id }}/punches/{{ r.correction_id }}/remove" onsubmit="return confirm({{ t('confirm_remove_punch')|tojson }})">
+              <input type="hidden" name="day" value="{{ day.isoformat() }}"><button class="btn danger sm" type="submit">{{ t('delete') }}</button>
+            </form>
+          {% elif r.voided %}
+            <form method="post" action="/employee/{{ employee.user_id }}/punches/{{ r.correction_id }}/remove">
+              <input type="hidden" name="day" value="{{ day.isoformat() }}"><button class="btn ghost sm" type="submit">{{ t('restore') }}</button>
+            </form>
+          {% else %}
+            <form class="form-inline" method="post" action="/employee/{{ employee.user_id }}/punches/void" style="justify-content:flex-end">
+              <input type="hidden" name="day" value="{{ day.isoformat() }}"><input type="hidden" name="ts" value="{{ r.timestamp.isoformat() }}">
+              <input type="text" name="note" placeholder="{{ t('reason_required') }}" required maxlength="255" style="min-width:150px">
+              <button class="btn ghost sm" type="submit">{{ t('ignore_punch') }}</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">{{ t('no_punches_day') }}</div>
+  {% endif %}
+  <div class="live-note">{{ t('corrections_note') }}</div>
+</section>
+{% endblock %}

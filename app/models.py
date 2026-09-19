@@ -96,6 +96,25 @@ class EmployeeVacation(Base):
         return (self.end_day - self.start_day).days + 1
 
 
+class PunchCorrection(Base):
+    """A manual correction layered on top of the device records (which are never modified).
+
+    kind = "add"  : a punch HR entered by hand at `timestamp`
+    kind = "void" : the device punch at `timestamp` is ignored
+    """
+
+    __tablename__ = "punch_corrections"
+    __table_args__ = (UniqueConstraint("user_id", "kind", "timestamp", name="uq_correction_user_kind_ts"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    note: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+
+
 class AppSetting(Base):
     """Key/value settings an admin changes from the UI (branding)."""
 

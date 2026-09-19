@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
-from typing import Any, Iterable
+from typing import Any, Iterable, NamedTuple
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects import postgresql, sqlite
@@ -21,6 +21,7 @@ from app.models import (
     EmployeeDayOverride,
     EmployeeVacation,
     EmployeeWeeklyDay,
+    PunchCorrection,
     SyncState,
     User,
 )
@@ -140,14 +141,50 @@ def update_user_settings(
     return u
 
 
-def punches_between(session: Session, start: datetime, end: datetime) -> list[Any]:
-    """Lightweight (user_id, timestamp) rows in [start, end) - no ORM objects, fast for large ranges."""
-    stmt = (
-        select(AttendanceRecord.user_id, AttendanceRecord.timestamp)
-        .where(AttendanceRecord.timestamp >= start, AttendanceRecord.timestamp < end)
-        .order_by(AttendanceRecord.timestamp)
+class EffectivePunch(NamedTuple):
+    user_id: str
+    timestamp: datetime
+    manual: bool = False
+
+
+def punches_between(session: Session, start: datetime, end: datetime, user_id: str | None = None) -> list[Any]:
+    """EFFECTIVE punches in [start, end): device records minus voided ones plus manual additions.
+
+    Lightweight rows (no ORM objects) so large ranges stay fast. Every report goes through here,
+    so corrections apply to the dashboard, API, CSV, print view and PDFs alike.
+    """
+    stmt = select(AttendanceRecord.user_id, AttendanceRecord.timestamp).where(
+        AttendanceRecord.timestamp >= start, AttendanceRecord.timestamp < end
     )
-    return list(session.execute(stmt))
+    cstmt = select(PunchCorrection.user_id, PunchCorrection.kind, PunchCorrection.timestamp).where(
+        PunchCorrection.timestamp >= start, PunchCorrection.timestamp < end
+    )
+    if user_id is not None:
+        stmt = stmt.where(AttendanceRecord.user_id == user_id)
+        cstmt = cstmt.where(PunchCorrection.user_id == user_id)
+    corrections = session.execute(cstmt).all()
+    rows: list[Any] = list(session.execute(stmt.order_by(AttendanceRecord.timestamp)))
+    if not corrections:
+        return rows
+    voided = {(uid, ts) for uid, kind, ts in corrections if kind == "void"}
+    out = [EffectivePunch(uid, ts) for uid, ts in rows if (uid, ts) not in voided]
+    existing = {(p.user_id, p.timestamp) for p in out}
+    out += [EffectivePunch(uid, ts, True) for uid, kind, ts in corrections if kind == "add" and (uid, ts) not in existing]
+    out.sort(key=lambda p: p.timestamp)
+    return out
+
+
+def corrected_days(session: Session, start: datetime, end: datetime, day_start_hour: int) -> dict[str, set[date]]:
+    """{user_id: {shift days that carry at least one manual correction}}."""
+    out: dict[str, set[date]] = {}
+    rows = session.execute(
+        select(PunchCorrection.user_id, PunchCorrection.timestamp).where(
+            PunchCorrection.timestamp >= start, PunchCorrection.timestamp < end
+        )
+    )
+    for uid, ts in rows:
+        out.setdefault(uid, set()).add(rules.shift_day(ts, day_start_hour))
+    return out
 
 
 def build_daily(
@@ -156,12 +193,14 @@ def build_daily(
     start, end = rules.shift_window(target_date, day_start_hour)
     schedule = load_day_types(session, target_date, target_date)
     day_types = {uid: days[target_date] for uid, days in schedule.items() if target_date in days}
+    corrected = {uid for uid, days in corrected_days(session, start, end, day_start_hour).items() if target_date in days}
     return rules.daily_report(
         active_employees(session, department_id),
         punches_between(session, start, end),
         target_date,
         day_start_hour,
         day_types,
+        corrected,
     )
 
 
@@ -178,6 +217,7 @@ def build_range(
         to_date,
         day_start_hour,
         load_day_types(session, from_date, to_date),
+        corrected_days(session, start, end, day_start_hour),
     )
 
 
@@ -188,17 +228,16 @@ def build_employee_history(
     if to_date < from_date:
         from_date, to_date = to_date, from_date
     start, end = rules.range_window(from_date, to_date, day_start_hour)
-    stmt = (
-        select(AttendanceRecord.user_id, AttendanceRecord.timestamp)
-        .where(
-            AttendanceRecord.user_id == employee.user_id,
-            AttendanceRecord.timestamp >= start,
-            AttendanceRecord.timestamp < end,
-        )
-        .order_by(AttendanceRecord.timestamp)
-    )
     schedule = load_day_types(session, from_date, to_date, [employee.user_id])
-    rep = rules.range_report([employee], list(session.execute(stmt)), from_date, to_date, day_start_hour, schedule)
+    rep = rules.range_report(
+        [employee],
+        punches_between(session, start, end, employee.user_id),
+        from_date,
+        to_date,
+        day_start_hour,
+        schedule,
+        corrected_days(session, start, end, day_start_hour),
+    )
     per_day = rep.employees[0].per_day if rep.employees else {}
     mine = schedule.get(employee.user_id, {})
     days: list[rules.EmployeeDay] = []
@@ -211,6 +250,91 @@ def build_employee_history(
         )
         d = d + timedelta(days=1)
     return days
+
+
+# --------------------------------------------------------------------------- #
+# Manual punch corrections (device records are never modified)
+# --------------------------------------------------------------------------- #
+
+
+def day_punches(session: Session, user_id: str, day: date, day_start_hour: int) -> list[dict[str, Any]]:
+    """Every punch of one shift day for the correction screen: device, manual and voided ones."""
+    start, end = rules.shift_window(day, day_start_hour)
+    device = session.execute(
+        select(AttendanceRecord.timestamp).where(
+            AttendanceRecord.user_id == user_id, AttendanceRecord.timestamp >= start, AttendanceRecord.timestamp < end
+        )
+    ).all()
+    corrections = session.scalars(
+        select(PunchCorrection).where(
+            PunchCorrection.user_id == user_id, PunchCorrection.timestamp >= start, PunchCorrection.timestamp < end
+        )
+    ).all()
+    voids = {c.timestamp: c for c in corrections if c.kind == "void"}
+    rows: list[dict[str, Any]] = []
+    for (ts,) in device:
+        v = voids.get(ts)
+        rows.append({"timestamp": ts, "source": "device", "voided": v is not None, "note": v.note if v else "",
+                     "by": v.created_by if v else "", "correction_id": v.id if v else None})
+    device_times = {ts for (ts,) in device}
+    for c in corrections:
+        if c.kind == "add" and c.timestamp not in device_times:
+            rows.append({"timestamp": c.timestamp, "source": "manual", "voided": False, "note": c.note,
+                         "by": c.created_by, "correction_id": c.id})
+    rows.sort(key=lambda r: r["timestamp"])
+    return rows
+
+
+def add_manual_punch(session: Session, user_id: str, ts: datetime, note: str, by: str) -> PunchCorrection:
+    note = (note or "").strip()[:255]
+    if not note:
+        raise ValidationError("note_required")
+    ts = ts.replace(microsecond=0)
+    if ts > datetime.now() + timedelta(minutes=5):
+        raise ValidationError("punch_in_future")
+    exists = session.scalar(
+        select(AttendanceRecord.id).where(AttendanceRecord.user_id == user_id, AttendanceRecord.timestamp == ts)
+    ) or session.scalar(
+        select(PunchCorrection.id).where(
+            PunchCorrection.user_id == user_id, PunchCorrection.kind == "add", PunchCorrection.timestamp == ts
+        )
+    )
+    if exists:
+        raise ValidationError("punch_exists")
+    row = PunchCorrection(user_id=user_id, kind="add", timestamp=ts, note=note, created_by=by, created_at=datetime.now())
+    session.add(row)
+    session.commit()
+    return row
+
+
+def void_punch(session: Session, user_id: str, ts: datetime, note: str, by: str) -> PunchCorrection:
+    note = (note or "").strip()[:255]
+    if not note:
+        raise ValidationError("note_required")
+    if not session.scalar(
+        select(AttendanceRecord.id).where(AttendanceRecord.user_id == user_id, AttendanceRecord.timestamp == ts)
+    ):
+        raise ValidationError("punch_not_found")
+    if session.scalar(
+        select(PunchCorrection.id).where(
+            PunchCorrection.user_id == user_id, PunchCorrection.kind == "void", PunchCorrection.timestamp == ts
+        )
+    ):
+        raise ValidationError("punch_already_voided")
+    row = PunchCorrection(user_id=user_id, kind="void", timestamp=ts, note=note, created_by=by, created_at=datetime.now())
+    session.add(row)
+    session.commit()
+    return row
+
+
+def remove_correction(session: Session, user_id: str, correction_id: int) -> PunchCorrection | None:
+    """Delete a manual punch, or restore a voided device punch. Returns the removed row."""
+    row = session.get(PunchCorrection, correction_id)
+    if row is None or row.user_id != user_id:
+        return None
+    session.delete(row)
+    session.commit()
+    return row
 
 
 # --------------------------------------------------------------------------- #

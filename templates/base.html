@@ -36,7 +36,7 @@
     .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px;color:var(--text)}
     .brand .logo{width:32px;height:32px;border-radius:9px;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:15px;font-weight:800;letter-spacing:-.5px}
     .brand .logoimg{height:32px;max-width:140px;object-fit:contain;border-radius:6px}
-    .nav{display:flex;gap:4px;margin-inline-start:6px}
+    .nav{display:flex;gap:4px;margin-inline-start:6px;flex-wrap:wrap}
     .nav a{padding:7px 11px;border-radius:8px;color:var(--muted);font-weight:500}
     .nav a:hover{background:var(--chip);text-decoration:none;color:var(--text)}
     .nav a.on{background:var(--accent-soft);color:var(--accent)}
@@ -128,6 +128,8 @@
     .bar.thin{height:6px;width:90px}
     .progress{display:flex;align-items:center;gap:8px;white-space:nowrap}
     .progress .pct{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:38px}
+    .editlink{color:var(--faint);font-size:13px;padding:0 3px;text-decoration:none}
+    .editlink:hover{color:var(--accent);text-decoration:none}
     .empty{color:var(--faint);text-align:center;padding:22px;font-style:italic}
     tr.nomatch{display:none}
     .hidden{display:none !important}
@@ -146,6 +148,15 @@
     .form-inline select{padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)}
     .kv{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:13px}
     .kv b{color:var(--text)}
+    @media (max-width:760px){
+      .topbar{position:static}
+      .topbar .in{gap:8px}
+      .nav{order:3;width:100%;margin-inline-start:0;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+      .nav a{white-space:nowrap}
+      .tools{width:100%}
+      .iconbtn .usr{max-width:110px}
+    }
+    html,body{max-width:100%;overflow-x:hidden}
     @media (max-width:640px){
       .wrap{padding:14px 12px 32px}
       h1{font-size:20px}
@@ -165,6 +176,7 @@
     <a class="brand" href="/">{% if brand and brand.has_logo %}<img class="logoimg" src="{{ brand.logo_url }}" alt="">{% else %}<span class="logo">{{ company[:1]|upper }}</span>{% endif %}<span>{{ company }}</span></a>
     <nav class="nav">
       <a href="/" class="{{ 'on' if page in ('dashboard','employee') else '' }}">{{ t('dashboard') }}</a>
+      <a href="/trends" class="{{ 'on' if page == 'trends' else '' }}">{{ t('trends') }}</a>
       <a href="/settings" class="{{ 'on' if page == 'settings' else '' }}">{{ t('settings') }}</a>
       {% if user and user.is_admin %}
       <a href="/users" class="{{ 'on' if page == 'users' else '' }}">{{ t('users') }}</a>

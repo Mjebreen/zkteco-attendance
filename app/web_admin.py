@@ -8,26 +8,28 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 import time
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from starlette.background import BackgroundTask
 from sqlalchemy.orm import Session
 
 from app import accounts, branding, i18n
 from app.accounts import AccountError, CurrentUser
 from app.auth import SESSION_COOKIE, check_same_origin, client_ip, require_admin, require_dashboard_auth
 from app.config import Settings, get_settings
-from app.db import get_db
+from app.db import get_db, get_engine
 from app.web import LANG_COOKIE, _audit, _base_context, _render, templates
 
 public_router = APIRouter()
 admin_router = APIRouter()
 
-ADMIN_ONLY_PATHS = {"/users", "/audit", "/audit.csv", "/branding"}
+ADMIN_ONLY_PATHS = {"/users", "/audit", "/audit.csv", "/branding", "/backup"}
 
 # ---- brute-force throttle (per IP + e-mail, in memory) ---------------------- #
 MAX_FAILURES = 8
@@ -364,12 +366,49 @@ async def save_branding(
 
 
 # --------------------------------------------------------------------------- #
+# Backup download (admin only)
+# --------------------------------------------------------------------------- #
+
+
+def _remove_file(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+@admin_router.get("/backup")
+def download_backup(
+    request: Request,
+    _admin: CurrentUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Build a consistent snapshot and stream it to the browser (saved on the PC viewing the page)."""
+    from app.backup import create_backup
+
+    try:
+        path, filename, info = create_backup(settings, get_engine())
+    except Exception as exc:
+        _audit(request, db, "backup.failed", f"Backup failed: {exc}")
+        raise HTTPException(500, f"backup failed: {exc}") from exc
+    _audit(request, db, "backup.download", f"Downloaded backup {filename} ({info['zip_bytes'] // 1024} KB)", **info)
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=filename,
+        headers={"Cache-Control": "no-store"},
+        background=BackgroundTask(_remove_file, path),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Audit log (admin only)
 # --------------------------------------------------------------------------- #
 
 PAGE_SIZE = 100
-ACTION_GROUPS = ["login", "logout", "schedule", "vacation", "employee", "department", "user", "password", "branding",
-                 "sync", "export"]
+ACTION_GROUPS = ["login", "logout", "punch", "schedule", "vacation", "employee", "department", "user", "password",
+                 "branding", "backup", "sync", "export"]
 
 
 def _audit_filters(request: Request) -> dict[str, Any]:

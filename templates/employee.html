@@ -203,7 +203,7 @@
         <button class="btn" type="submit" name="kind" value="move">{{ t('move') }}</button>
       </div>
     </div>
-    <div class="row" style="justify-content:flex-end;margin:8px 0 0"><button class="btn ghost" type="button" onclick="document.getElementById('daydlg').close()">{{ t('cancel') }}</button></div>
+    <div class="row" style="justify-content:space-between;margin:8px 0 0"><a class="btn ghost" id="dlg-punches" href="#">✎ {{ t('edit_punches') }}</a><button class="btn ghost" type="button" onclick="document.getElementById('daydlg').close()">{{ t('cancel') }}</button></div>
   </form>
 </dialog>
 
@@ -225,13 +225,14 @@
           {% elif r.open %}<span class="chip warn open"><span class="dot"></span>{{ t('not_checked_out') }}</span>
           {% elif e.last_out %}<span class="chip ok">{{ t('present') }}</span>
           {% else %}<span class="chip">{{ t('no_checkout') }}</span>{% endif %}
+          {% if e.corrected %} <span class="chip warn" title="{{ t('edited_hint') }}">{{ t('edited') }}</span>{% endif %}
           {% if e.attended and e.day_type == 'off' %} <span class="chip warn">{{ t('worked_day_off') }}</span>{% elif e.attended and e.day_type == 'vacation' %} <span class="chip vac">{{ t('worked_vacation') }}</span>{% endif %}
           {% if r.flag == 'late' %} <span class="chip bad">{{ t('late') }}</span>{% elif r.flag == 'early' %} <span class="chip info">{{ t('early') }}</span>{% endif %}
         </td>
         <td class="mono">{{ e.first_in|hhmmss }}</td>
         <td class="mono">{{ e.last_out|hhmmss }}</td>
         <td class="num">{{ e.punches if e.attended else '—' }}</td>
-        <td class="num"><span class="hours-val">{{ r.hours|hours }}</span></td>
+        <td class="num"><span class="hours-val">{{ r.hours|hours }}</span> <a class="editlink" href="/employee/{{ employee.user_id }}/punches?day={{ r.date.isoformat() }}" title="{{ t('edit_punches') }}">✎</a></td>
         <td>{% if e.attended %}<span class="progress"><span class="bar {{ 'ok' if r.progress >= 1 else ('warn' if r.progress < 0.5 else '') }}"><div style="width:{{ (r.progress*100)|int }}%"></div></span><span class="pct">{{ (r.progress*100)|int }}%</span></span>{% endif %}</td>
       </tr>
     {% endfor %}
@@ -257,6 +258,7 @@
         document.getElementById('dlg-note').value=b.dataset.note||'';
         document.getElementById('dlg-move').style.display=(b.dataset.type==='off')?'':'none';
         document.getElementById('dlg-move-to').value='';
+        document.getElementById('dlg-punches').href='/employee/{{ employee.user_id }}/punches?day='+b.dataset.day;
         if(dlg.showModal){dlg.showModal();}else{dlg.setAttribute('open','');}
       });
     });

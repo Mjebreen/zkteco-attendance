@@ -13,6 +13,14 @@
 {% elif msg == 'deleted' %}<div class="notice ok">{{ t('deleted') }}</div>
 {% elif msg and msg.startswith('err:') %}<div class="notice bad">{{ t('error') }}: {{ t(msg[4:]) }}</div>{% endif %}
 
+{% if user and user.is_admin %}
+<section class="box">
+  <h2>{{ t('backup') }}</h2>
+  <div class="sub" style="margin-bottom:12px">{{ t('backup_hint') }}</div>
+  <a class="btn" href="/backup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v3h16v-3"/></svg>{{ t('download_backup') }}</a>
+</section>
+{% endif %}
+
 <section class="box">
   <h2>{{ t('departments') }} <span class="pill">{{ departments|length }}</span></h2>
   <form class="form-inline" method="post" action="/settings/departments{% if show_inactive %}?show_inactive=1{% endif %}" style="margin-bottom:14px">

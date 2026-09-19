@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from app import branding, i18n, rules, service
+from app import branding, i18n, rules, service, trends
 from app.accounts import record_audit
 from app.auth import client_ip, current_user, require_dashboard_auth
 from app.config import Settings, get_settings
@@ -212,6 +212,7 @@ def _decorate_day_rows(rep: rules.DailyReport, settings: Settings, live: bool, n
                 "met": hours >= settings.target_hours > 0,
                 "open": open_session,
                 "flag": _flag(e, settings),
+                "corrected": e.corrected,
                 "search": f"{e.name} {e.user_id} {e.department or ''}".lower(),
             }
         )
@@ -620,6 +621,152 @@ async def save_day_override(user_id: str, request: Request, db: Session = Depend
         _audit(request, db, "schedule.day", f"{day} for {_emp_label(db, user_id)} {verb}",
                target=f"employee:{user_id}", day=str(day), before=before, after=after, note=note or None)
     return _employee_redirect(user_id, month, "saved")
+
+
+# --------------------------------------------------------------------------- #
+# Manual punch corrections
+# --------------------------------------------------------------------------- #
+
+
+def _punches_redirect(user_id: str, day: date | None, msg: str) -> RedirectResponse:
+    params = {"msg": msg}
+    if day:
+        params["day"] = day.isoformat()
+    return RedirectResponse(url=f"/employee/{user_id}/punches?{urlencode(params)}", status_code=303)
+
+
+@router.get("/employee/{user_id}/punches", response_class=HTMLResponse)
+def punches_page(user_id: str, request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    emp = service.get_employee(db, user_id)
+    if emp is None:
+        raise HTTPException(404, "employee not found")
+    ctx = _base_context(request, db, settings, "employee")
+    day = _form_date(request.query_params.get("day")) or rules.shift_day(datetime.now(), settings.day_start_hour)
+    start, end = rules.shift_window(day, settings.day_start_hour)
+    result = service.build_employee_history(db, emp, day, day, settings.day_start_hour)[0]
+    now = datetime.now()
+    suggested = min(max(now, start), end - timedelta(minutes=1)) if start <= now < end else start.replace(hour=start.hour)
+    ctx.update(
+        employee=emp,
+        day=day,
+        rows=service.day_punches(db, user_id, day, settings.day_start_hour),
+        result=result,
+        window_start=start,
+        window_end_label=(end - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M"),
+        window_max=(end - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%S"),
+        suggested=suggested.strftime("%Y-%m-%dT%H:%M"),
+        prev_day=(day - timedelta(days=1)).isoformat(),
+        next_day=(day + timedelta(days=1)).isoformat(),
+    )
+    return _render(request, "punches.html", ctx)
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    text_value = str(value or "").strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(text_value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+@router.post("/employee/{user_id}/punches")
+async def add_punch(user_id: str, request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    if service.get_employee(db, user_id) is None:
+        raise HTTPException(404, "employee not found")
+    form = await request.form()
+    day, ts, note = _form_date(form.get("day")), _parse_ts(form.get("ts")), str(form.get("note") or "")
+    if ts is None:
+        return _punches_redirect(user_id, day, "err:bad_date")
+    day = day or rules.shift_day(ts, settings.day_start_hour)
+    if rules.shift_day(ts, settings.day_start_hour) != day:
+        return _punches_redirect(user_id, day, "err:outside_shift_day")
+    actor = current_user(request)
+    try:
+        service.add_manual_punch(db, user_id, ts, note, actor.label if actor else "unknown")
+    except service.ValidationError as exc:
+        return _punches_redirect(user_id, day, f"err:{exc}")
+    _audit(request, db, "punch.add", f"Added manual punch {ts:%Y-%m-%d %H:%M:%S} for {_emp_label(db, user_id)}: {note.strip()}",
+           target=f"employee:{user_id}", timestamp=str(ts), shift_day=str(day), note=note.strip())
+    return _punches_redirect(user_id, day, "saved")
+
+
+@router.post("/employee/{user_id}/punches/void")
+async def void_punch(user_id: str, request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    if service.get_employee(db, user_id) is None:
+        raise HTTPException(404, "employee not found")
+    form = await request.form()
+    day, note = _form_date(form.get("day")), str(form.get("note") or "")
+    try:
+        ts = datetime.fromisoformat(str(form.get("ts") or ""))
+    except ValueError:
+        return _punches_redirect(user_id, day, "err:bad_date")
+    actor = current_user(request)
+    try:
+        service.void_punch(db, user_id, ts, note, actor.label if actor else "unknown")
+    except service.ValidationError as exc:
+        return _punches_redirect(user_id, day, f"err:{exc}")
+    _audit(request, db, "punch.void", f"Ignored device punch {ts:%Y-%m-%d %H:%M:%S} of {_emp_label(db, user_id)}: {note.strip()}",
+           target=f"employee:{user_id}", timestamp=str(ts), note=note.strip())
+    return _punches_redirect(user_id, day or rules.shift_day(ts, settings.day_start_hour), "saved")
+
+
+@router.post("/employee/{user_id}/punches/{correction_id}/remove")
+async def remove_punch_correction(user_id: str, correction_id: int, request: Request, db: Session = Depends(get_db)):
+    form = await request.form()
+    day = _form_date(form.get("day"))
+    row = service.remove_correction(db, user_id, correction_id)
+    if row is None:
+        raise HTTPException(404, "correction not found")
+    if row.kind == "add":
+        _audit(request, db, "punch.delete", f"Deleted manual punch {row.timestamp:%Y-%m-%d %H:%M:%S} of {_emp_label(db, user_id)}",
+               target=f"employee:{user_id}", timestamp=str(row.timestamp), original_note=row.note, added_by=row.created_by)
+    else:
+        _audit(request, db, "punch.restore", f"Restored device punch {row.timestamp:%Y-%m-%d %H:%M:%S} of {_emp_label(db, user_id)}",
+               target=f"employee:{user_id}", timestamp=str(row.timestamp), original_note=row.note, ignored_by=row.created_by)
+    return _punches_redirect(user_id, day, "deleted" if row.kind == "add" else "saved")
+
+
+# --------------------------------------------------------------------------- #
+# Trends
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/trends", response_class=HTMLResponse)
+def trends_page(request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    ctx = _base_context(request, db, settings, "trends")
+    q = request.query_params
+    if q.get("from") or q.get("to") or q.get("range"):
+        from_date, to_date = resolve_range(None, q.get("from"), q.get("to"), q.get("range"))
+    else:
+        to_date = today()
+        from_date = to_date - timedelta(days=29)
+    lang = ctx["lang"]
+    rep = service.build_range(db, from_date, to_date, settings.day_start_hour, ctx["department_id"])
+    data = trends.build(
+        rep,
+        service.load_day_types(db, from_date, to_date),
+        late_after=settings.late_after,
+        early_before=settings.early_before,
+        turn=settings.late_early_turn,
+        target_hours=settings.target_hours,
+        now=ctx["now"],
+    )
+    order = [(settings.week_start + i) % 7 for i in range(7)]
+    by_wd = dict(data["weekdays"])
+    data["weekdays"] = [(i18n.WEEKDAYS_SHORT[lang][wd], by_wd[wd]) for wd in order]
+    data["people"].sort(key=lambda p: (-p.rate, p.name.lower()))
+    ctx.update(data)
+    ctx.update(
+        from_date=from_date.isoformat(),
+        to_date=to_date.isoformat(),
+        from_pretty=i18n.fmt_date(from_date, lang, "medium"),
+        to_pretty=i18n.fmt_date(to_date, lang, "medium"),
+        days_total=rep.days_total,
+        arrival=lambda minutes: trends.clock(minutes, settings.day_start_hour),
+    )
+    return _render(request, "trends.html", ctx)
 
 
 def _form_date(value: Any) -> date | None:
