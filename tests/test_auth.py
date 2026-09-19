@@ -337,3 +337,23 @@ def test_admin_can_rebrand_and_hr_cannot(admin_client, session_factory):
         assert hr.get("/branding").status_code == 403
         assert hr.post("/branding", data={"company_name": "Hacked", "default_theme": "auto"}).status_code == 403
         assert "Branding" not in hr.get("/").text
+
+
+def test_hr_in_a_browser_is_sent_back_to_the_dashboard_not_shown_json(client, session_factory):
+    from app.web_admin import reset_throttle
+
+    reset_throttle()
+    with session_factory() as s:
+        accounts.create_user(s, HR[0], HR[1], role="hr")
+    # logging in with a saved "next" that points at an admin page lands on the dashboard instead
+    r = login(client, HR[0], HR[1], next_url="/audit?page=2")
+    assert r.status_code == 303 and r.headers["location"] == "/"
+    html = {"accept": "text/html,application/xhtml+xml"}
+    for path in ("/users", "/audit", "/branding"):
+        r = client.get(path, headers=html, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/?denied=1", path
+    page = client.get("/?denied=1", headers=html)
+    assert page.status_code == 200 and "administrators only" in page.text and "Administrator access required" not in page.text
+    # scripts / API clients still get a proper 403
+    assert client.get("/audit").status_code == 403
+    assert client.post("/users", data={"email": "z@example.com", "role": "admin", "password": "whatever-123"}, headers=html).status_code == 403

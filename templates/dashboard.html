@@ -15,6 +15,7 @@
   </div>
 </div>
 
+{% if denied %}<div class="notice bad">{{ t('admin_only') }}</div>{% endif %}
 {% if synced %}<div class="notice ok">{% if synced == 'queued' %}{{ t('sync_queued') }}{% else %}{{ t('synced_ok') }}{% endif %}</div>{% endif %}
 {% if sync_error %}<div class="notice bad">{{ t('sync_failed') }}: {{ sync_error }}</div>{% endif %}
 

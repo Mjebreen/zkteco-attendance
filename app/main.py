@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.api import router as api_router
-from app.auth import LoginRequired
+from app.auth import AdminRequired, LoginRequired
 from app.config import get_settings
 from app.logging_config import setup_audit_file, setup_logging
 from app.web import router as web_router
@@ -68,6 +68,12 @@ def create_app() -> FastAPI:
             target = request.url.path + (("?" + request.url.query) if request.url.query else "")
             return RedirectResponse(url="/login?next=" + quote(target, safe=""), status_code=303)
         return JSONResponse({"detail": "Authentication required"}, status_code=401)
+
+    @app.exception_handler(AdminRequired)
+    async def _admin_required(request: Request, _exc: AdminRequired):
+        if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+            return RedirectResponse(url="/?denied=1", status_code=303)
+        return JSONResponse({"detail": "Administrator access required"}, status_code=403)
 
     return app
 

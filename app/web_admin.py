@@ -27,6 +27,8 @@ from app.web import LANG_COOKIE, _audit, _base_context, _render, templates
 public_router = APIRouter()
 admin_router = APIRouter()
 
+ADMIN_ONLY_PATHS = {"/users", "/audit", "/audit.csv", "/branding"}
+
 # ---- brute-force throttle (per IP + e-mail, in memory) ---------------------- #
 MAX_FAILURES = 8
 WINDOW_SECONDS = 10 * 60
@@ -131,6 +133,8 @@ def login_submit(
     current = CurrentUser(id=user.id, email=user.email, name=user.name or user.email, role=user.role)
     accounts.record_audit(db, current, "login.success", f"{user.email} signed in", ip=ip,
                           details={"user_agent": (request.headers.get("user-agent") or "")[:200]})
+    if user.role != "admin" and next_url.split("?")[0].rstrip("/") in ADMIN_ONLY_PATHS:
+        next_url = "/"
     resp = RedirectResponse(url=next_url, status_code=303)
     resp.set_cookie(
         SESSION_COOKIE,

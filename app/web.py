@@ -181,6 +181,7 @@ def _base_context(request: Request, db: Session, settings: Settings, page: str) 
         "department_id": dept.id if dept else None,
         "department_name": dept.name if dept else None,
         "user": current_user(request),
+        "denied": request.query_params.get("denied") == "1",
         "msg": request.query_params.get("msg"),
         "synced": request.query_params.get("synced"),
         "sync_error": request.query_params.get("sync_error"),

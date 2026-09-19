@@ -28,6 +28,10 @@ class LoginRequired(Exception):
     """Raised when a web route needs a signed-in user; turned into a redirect or a 401 in main.py."""
 
 
+class AdminRequired(Exception):
+    """A signed-in non-admin opened an admin-only page; browsers are sent back to the dashboard."""
+
+
 def _eq(a: str, b: str) -> bool:
     return secrets.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
 
@@ -87,7 +91,7 @@ def require_dashboard_auth(
 
 def require_admin(user: CurrentUser = Depends(require_dashboard_auth)) -> CurrentUser:
     if not user.is_admin:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator access required")
+        raise AdminRequired()
     return user
 
 
