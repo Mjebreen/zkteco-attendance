@@ -48,6 +48,27 @@
   {% endif %}
 </section>
 
+<section class="box">
+  <h2>{{ t('bulk_weekly') }}</h2>
+  <div class="sub" style="margin-bottom:12px">{{ t('bulk_weekly_hint') }}</div>
+  <form class="form-inline" method="post" action="/settings/weekly-bulk{% if show_inactive %}?show_inactive=1{% endif %}">
+    <select name="scope">
+      <option value="all">{{ t('everyone') }}</option>
+      {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+      {% if departments %}<option value="none">{{ t('no_department') }}</option>{% endif %}
+    </select>
+    <span class="sub">{{ t('every') }}</span>
+    <select name="weekday">{% for wd, label in weekday_order %}<option value="{{ wd }}">{{ label }}</option>{% endfor %}</select>
+    <span class="sub">=</span>
+    <select name="kind">
+      <option value="off">{{ t('day_off') }}</option>
+      <option value="online">{{ t('online_day') }}</option>
+      <option value="work">{{ t('working_day') }}</option>
+    </select>
+    <button class="btn" type="submit">{{ t('apply') }}</button>
+  </form>
+</section>
+
 <section class="box" data-searchable>
   <h2>{{ t('employees') }} <span class="pill">{{ users|length }}</span>
     <span class="right"><a href="/settings{% if not show_inactive %}?show_inactive=1{% endif %}">{% if show_inactive %}✓ {% endif %}{{ t('show_inactive') }}</a></span></h2>
@@ -57,7 +78,7 @@
   {# one form per employee; inputs reference them via form="" so the table markup stays valid #}
   {% for u in users %}<form method="post" action="/settings/employees/{{ u.user_id }}{% if show_inactive %}?show_inactive=1{% endif %}" id="emp-{{ loop.index }}" hidden></form>{% endfor %}
   <div class="tbl"><table>
-    <thead><tr><th>{{ t('device_name') }}</th><th>{{ t('id') }}</th><th>{{ t('display_name') }}</th><th>{{ t('department') }}</th><th>{{ t('status') }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ t('device_name') }}</th><th>{{ t('id') }}</th><th>{{ t('display_name') }}</th><th>{{ t('department') }}</th><th>{{ t('weekly_days') }}</th><th>{{ t('status') }}</th><th></th></tr></thead>
     <tbody>
     {% for u in users %}
       <tr data-search="{{ (u.name ~ ' ' ~ (u.display_name or '') ~ ' ' ~ u.user_id ~ ' ' ~ (u.department.name if u.department else ''))|lower }}">
@@ -70,6 +91,7 @@
             {% for d in departments %}<option value="{{ d.id }}" {{ 'selected' if u.department_id == d.id else '' }}>{{ d.name }}</option>{% endfor %}
           </select>
         </td>
+        <td>{% for w in weekly_labels.get(u.user_id, []) %}<span class="chip {{ 'info' if w.kind == 'online' else '' }}" title="{{ t('online_day') if w.kind == 'online' else t('day_off') }}">{{ w.day }}</span> {% endfor %}<a href="/employee/{{ u.user_id }}#schedule" class="sub">{{ t('schedule') }} →</a></td>
         <td>{% if u.active %}<span class="chip ok">{{ t('active') }}</span>{% else %}<span class="chip">{{ t('inactive') }}</span>{% endif %}</td>
         <td class="num"><button form="emp-{{ loop.index }}" class="btn sm" type="submit">{{ t('save') }}</button></td>
       </tr>

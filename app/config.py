@@ -91,6 +91,7 @@ class Settings:
     early_before: str  # first punch before this time-of-day is "Early" ("" = off)
     late_early_turn: str  # time-of-day where the late window ends and the early window begins ("" = midnight)
     default_lang: str  # "en" | "ar"
+    week_start: int  # first column of calendars: 0 = Monday ... 5 = Saturday, 6 = Sunday
     # Storage / API
     database_url: str
     api_key: str
@@ -142,6 +143,7 @@ def load_settings() -> Settings:
         early_before=_hhmm(os.getenv("EARLY_BEFORE_TIME"), "13:00"),
         late_early_turn=_hhmm(os.getenv("LATE_EARLY_TURN_TIME"), "01:00"),
         default_lang=_lang(os.getenv("DEFAULT_LANG")),
+        week_start={"monday": 0, "saturday": 5, "sunday": 6}.get((os.getenv("WEEK_START") or "monday").strip().lower(), 0),
         database_url=normalize_database_url(os.getenv("DATABASE_URL") or "sqlite:////data/attendance.db"),
         api_key=(os.getenv("API_KEY") or "").strip(),
         output_dir=Path(os.getenv("OUTPUT_DIR") or "/data/reports"),

@@ -148,6 +148,8 @@ def summary(
             "total": len(rep.employees),
             "present": len(rep.present),
             "absent": len(rep.absent),
+            "off": len(rep.off),
+            "online": len(rep.online),
             "total_hours": round(rep.total_hours, 2),
             "total_hours_hm": format_hm(rep.total_hours),
             "employees": [
@@ -159,6 +161,7 @@ def summary(
                     "last_out": _iso(e.last_out),
                     "hours": round(e.hours_worked, 2),
                     "hours_hm": format_hm(e.hours_worked),
+                    "day_type": e.day_type,
                     "attended": e.attended,
                 }
                 for e in rep.employees
@@ -182,6 +185,9 @@ def summary(
                 "days_present": e.days_present,
                 "days_total": e.days_total,
                 "days_absent": e.days_absent,
+                "days_off": e.days_off,
+                "days_online": e.days_online,
+                "days_expected": e.days_expected,
                 "total_hours": round(e.total_hours, 2),
                 "total_hours_hm": format_hm(e.total_hours),
                 "avg_hours_per_attended_day": round(e.avg_hours_per_attended_day, 2),

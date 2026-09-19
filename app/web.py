@@ -194,18 +194,25 @@ def _dept_breakdown_day(rep: rules.DailyReport, rows: list[dict[str, Any]], no_d
     open_by_id = {r["e"].user_id for r in rows if r["open"]}
     for e in rep.employees:
         key = e.department or no_dept_label
-        g = groups.setdefault(key, {"name": key, "total": 0, "present": 0, "absent": 0, "hours": 0.0, "open": 0})
+        g = groups.setdefault(
+            key, {"name": key, "total": 0, "present": 0, "absent": 0, "off": 0, "online": 0, "hours": 0.0, "open": 0}
+        )
         g["total"] += 1
         if e.attended:
             g["present"] += 1
             g["hours"] += e.hours_worked
             if e.user_id in open_by_id:
                 g["open"] += 1
+        elif e.day_type == "off":
+            g["off"] += 1
+        elif e.day_type == "online":
+            g["online"] += 1
         else:
             g["absent"] += 1
     out = sorted(groups.values(), key=lambda g: (g["name"] == no_dept_label, g["name"].lower()))
     for g in out:
-        g["rate"] = g["present"] / g["total"] if g["total"] else 0
+        expected = g["total"] - g["off"]
+        g["rate"] = min(1.0, (g["present"] + g["online"]) / expected) if expected else 0
     return out
 
 
@@ -285,6 +292,7 @@ def _report_context(request: Request, db: Session, settings: Settings, page: str
             ],
             dept_breakdown=_dept_breakdown_range(rep, t("no_department")),
             presence=_presence_per_day(rep),
+            has_schedule=any(e.days_off or e.days_online for e in rep.employees),
             live=False,
         )
     else:
@@ -309,8 +317,14 @@ def _report_context(request: Request, db: Session, settings: Settings, page: str
             total_hours=rules.format_hm(rep.total_hours),
             present_list=rep.present,
             absent_list=rep.absent,
+            off_list=rep.off,
+            online_list=rep.online,
+            off_count=len(rep.off),
+            online_count=len(rep.online),
             present_rows=rows,
             absent_rows=[{"e": e, "search": f"{e.name} {e.user_id} {e.department or ''}".lower()} for e in rep.absent],
+            off_rows=[{"e": e, "search": f"{e.name} {e.user_id} {e.department or ''}".lower()} for e in rep.off],
+            online_rows=[{"e": e, "search": f"{e.name} {e.user_id} {e.department or ''}".lower()} for e in rep.online],
             dept_breakdown=_dept_breakdown_day(rep, rows, t("no_department")),
             live=live,
         )
@@ -341,26 +355,27 @@ def export_csv(request: Request, db: Session = Depends(get_db), settings: Settin
     w = csv.writer(buf)
     if from_date == to_date:
         rep = service.build_daily(db, from_date, settings.day_start_hour, dept_id)
-        w.writerow(["date", "employee", "id", "department", "attended", "first_in", "last_out", "hours", "hours_hm", "punches", "checkin"])
+        w.writerow(["date", "employee", "id", "department", "attended", "first_in", "last_out", "hours", "hours_hm", "punches", "checkin", "day_type"])
         for e in rep.employees:
             w.writerow([
                 from_date.isoformat(), e.name, e.user_id, e.department or "", "yes" if e.attended else "no",
                 e.first_in.isoformat(timespec="seconds") if e.first_in else "",
                 e.last_out.isoformat(timespec="seconds") if e.last_out else "",
-                f"{e.hours_worked:.2f}", rules.format_hm(e.hours_worked), e.punches, _flag(e, settings) or "",
+                f"{e.hours_worked:.2f}", rules.format_hm(e.hours_worked), e.punches, _flag(e, settings) or "", e.day_type,
             ])
         filename = f"attendance_{from_date:%Y-%m-%d}.csv"
     else:
         rep = service.build_range(db, from_date, to_date, settings.day_start_hour, dept_id)
         w.writerow(["from", "to", "employee", "id", "department", "days_present", "days_total", "days_absent",
                     "attendance_rate", "total_hours", "total_hours_hm", "avg_hours_per_attended_day",
-                    "avg_hours_hm"])
+                    "avg_hours_hm", "days_off", "days_online", "days_expected"])
         for e in rep.employees:
             w.writerow([
                 from_date.isoformat(), to_date.isoformat(), e.name, e.user_id, e.department or "",
                 e.days_present, e.days_total, e.days_absent, f"{e.attendance_rate:.4f}",
                 f"{e.total_hours:.2f}", rules.format_hm(e.total_hours),
                 f"{e.avg_hours_per_attended_day:.2f}", rules.format_hm(e.avg_hours_per_attended_day),
+                e.days_off, e.days_online, e.days_expected,
             ])
         filename = f"attendance_{from_date:%Y-%m-%d}_to_{to_date:%Y-%m-%d}.csv"
     data = "﻿" + buf.getvalue()  # BOM so Excel opens UTF-8 (Arabic names) correctly
@@ -410,16 +425,23 @@ def employee_profile(
             }
         )
     present_days = sum(1 for r in rows if r["e"].attended)
+    off_days = sum(1 for r in rows if not r["e"].attended and r["e"].day_type == "off")
+    online_days = sum(1 for r in rows if not r["e"].attended and r["e"].day_type == "online")
+    expected_days = len(rows) - off_days
     total_hours = sum(r["e"].hours_worked for r in rows)
+    ctx.update(_calendar_context(request, db, settings, emp, ctx["lang"]))
     ctx.update(
         employee=emp,
         from_date=from_date.isoformat(),
         to_date=to_date.isoformat(),
         rows=list(reversed(rows)),  # newest first
         days_total=len(rows),
+        days_expected=expected_days,
         days_present=present_days,
-        days_absent=len(rows) - present_days,
-        rate=present_days / len(rows) if rows else 0,
+        days_off=off_days,
+        days_online=online_days,
+        days_absent=max(0, expected_days - present_days - online_days),
+        rate=min(1.0, (present_days + online_days) / expected_days) if expected_days else 0,
         total_hours=total_hours,
         avg_hours=total_hours / present_days if present_days else 0,
         target_met_days=sum(1 for r in rows if r["met"] and not r["open"]),
@@ -435,6 +457,141 @@ def _daterange(a: date, b: date):
 
 
 # --------------------------------------------------------------------------- #
+# Employee schedule: weekly pattern + month calendar with per-date overrides
+# --------------------------------------------------------------------------- #
+
+
+def _parse_month(raw: str | None) -> date:
+    try:
+        y, m = (raw or "").split("-")
+        return date(int(y), int(m), 1)
+    except (ValueError, TypeError):
+        return today().replace(day=1)
+
+
+def _calendar_context(request: Request, db: Session, settings: Settings, emp: rules.Employee, lang: str) -> dict[str, Any]:
+    first = _parse_month(request.query_params.get("month"))
+    next_first = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+    last = next_first - timedelta(days=1)
+    prev_first = (first - timedelta(days=1)).replace(day=1)
+    ws = settings.week_start
+    grid_start = first - timedelta(days=(first.weekday() - ws) % 7)
+    grid_end = last + timedelta(days=6 - (last.weekday() - ws) % 7)
+
+    days = service.build_employee_history(db, emp, grid_start, grid_end, settings.day_start_hour)
+    weekly = service.get_weekly_pattern(db, emp.user_id)
+    overrides = service.get_overrides(db, emp.user_id, grid_start, grid_end)
+    current = rules.shift_day(datetime.now(), settings.day_start_hour)
+
+    cells = []
+    for d, day in zip(_daterange(grid_start, grid_end), days):
+        ov = overrides.get(d)
+        if day.attended:
+            state = "worked_off" if day.day_type == "off" else "present"
+        elif day.day_type in ("off", "online"):
+            state = day.day_type
+        elif d > current:
+            state = "future"
+        elif d == current:
+            state = "today"
+        else:
+            state = "absent"
+        cells.append(
+            {
+                "date": d,
+                "in_month": d.month == first.month,
+                "day_type": day.day_type,
+                "weekly_kind": weekly.get(d.weekday(), "work"),
+                "override": ov.kind if ov else "",
+                "note": (ov.note or "") if ov else "",
+                "state": state,
+                "attended": day.attended,
+                "hours": rules.format_hm(day.hours_worked) if day.hours_worked else "",
+                "first_in": day.first_in.strftime("%H:%M") if day.first_in else "",
+                "last_out": day.last_out.strftime("%H:%M") if day.last_out else "",
+                "is_today": d == current,
+            }
+        )
+    order = [(ws + i) % 7 for i in range(7)]
+    return {
+        "cal_weeks": [cells[i : i + 7] for i in range(0, len(cells), 7)],
+        "cal_weekdays": [i18n.WEEKDAYS_SHORT[lang][wd] for wd in order],
+        "cal_month": first.strftime("%Y-%m"),
+        "cal_month_label": f"{i18n.MONTHS[lang][first.month - 1]} {first.year}",
+        "cal_prev": prev_first.strftime("%Y-%m"),
+        "cal_next": next_first.strftime("%Y-%m"),
+        "cal_this": today().strftime("%Y-%m"),
+        "weekly_pattern": weekly,
+        "weekday_order": [(wd, i18n.WEEKDAYS[lang][wd]) for wd in order],
+    }
+
+
+def _employee_redirect(user_id: str, month: str, msg: str) -> RedirectResponse:
+    params = {"msg": msg}
+    if month:
+        params["month"] = month
+    return RedirectResponse(url=f"/employee/{user_id}?{urlencode(params)}#schedule", status_code=303)
+
+
+@router.post("/employee/{user_id}/weekly")
+async def save_weekly_pattern(user_id: str, request: Request, db: Session = Depends(get_db)):
+    if service.get_employee(db, user_id) is None:
+        raise HTTPException(404, "employee not found")
+    form = await request.form()
+    pattern = {wd: str(form.get(f"wd{wd}") or "work") for wd in range(7)}
+    service.set_weekly_pattern(db, user_id, pattern)
+    return _employee_redirect(user_id, str(form.get("month") or ""), "saved")
+
+
+@router.post("/employee/{user_id}/day")
+async def save_day_override(user_id: str, request: Request, db: Session = Depends(get_db)):
+    """kind = auto | work | off | online | move (move needs move_to)."""
+    if service.get_employee(db, user_id) is None:
+        raise HTTPException(404, "employee not found")
+    form = await request.form()
+    month = str(form.get("month") or "")
+    try:
+        day = datetime.strptime(str(form.get("day") or ""), "%Y-%m-%d").date()
+    except ValueError:
+        return _employee_redirect(user_id, month, "err:bad_date")
+    kind = str(form.get("kind") or "auto")
+    note = str(form.get("note") or "")
+    if kind == "move":
+        try:
+            target = datetime.strptime(str(form.get("move_to") or ""), "%Y-%m-%d").date()
+        except ValueError:
+            return _employee_redirect(user_id, month, "err:bad_date")
+        try:
+            service.move_day_off(db, user_id, day, target, note)
+        except service.ValidationError as exc:
+            return _employee_redirect(user_id, month, f"err:{exc}")
+    else:
+        service.set_day_override(db, user_id, day, kind if kind in service.OVERRIDE_KINDS else None, note)
+    return _employee_redirect(user_id, month, "saved")
+
+
+@router.post("/settings/weekly-bulk")
+def weekly_bulk(
+    request: Request,
+    scope: str = Form("all"),
+    weekday: int = Form(...),
+    kind: str = Form("off"),
+    db: Session = Depends(get_db),
+):
+    """Set one recurring weekday (off / online / back to working) for everyone or one department."""
+    users = service.list_users_admin(db, include_inactive=False)
+    if scope == "none":
+        users = [u for u in users if u.department_id is None]
+    elif scope.isdigit():
+        users = [u for u in users if u.department_id == int(scope)]
+    try:
+        service.set_weekly_day_bulk(db, [u.user_id for u in users], weekday, kind)
+    except service.ValidationError as exc:
+        return _settings_redirect(request, f"err:{exc}")
+    return _settings_redirect(request, "saved")
+
+
+# --------------------------------------------------------------------------- #
 # Settings: departments + employee assignment
 # --------------------------------------------------------------------------- #
 
@@ -443,10 +600,21 @@ def _daterange(a: date, b: date):
 def settings_page(request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
     ctx = _base_context(request, db, settings, "settings")
     show_inactive = request.query_params.get("show_inactive") == "1"
+    users = service.list_users_admin(db, include_inactive=show_inactive)
+    lang = ctx["lang"]
+    weekly_labels: dict[str, list[dict[str, str]]] = {}
+    for u in users:
+        pattern = service.get_weekly_pattern(db, u.user_id)
+        weekly_labels[u.user_id] = [
+            {"day": i18n.WEEKDAYS_SHORT[lang][wd], "kind": kind} for wd, kind in sorted(pattern.items())
+        ]
+    order = [(settings.week_start + i) % 7 for i in range(7)]
     ctx.update(
-        users=service.list_users_admin(db, include_inactive=show_inactive),
+        users=users,
         member_counts=service.department_member_counts(db),
         show_inactive=show_inactive,
+        weekly_labels=weekly_labels,
+        weekday_order=[(wd, i18n.WEEKDAYS[lang][wd]) for wd in order],
     )
     return _render(request, "settings.html", ctx)
 

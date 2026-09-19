@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from datetime import date as date_type
+
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -50,6 +52,31 @@ class User(Base):
     @property
     def effective_name(self) -> str:
         return (self.display_name or "").strip() or (self.name or "").strip() or f"User {self.user_id}"
+
+
+class EmployeeWeeklyDay(Base):
+    """Recurring weekly schedule entry, e.g. every Friday = off, every Tuesday = online."""
+
+    __tablename__ = "employee_weekly_days"
+    __table_args__ = (UniqueConstraint("user_id", "weekday", name="uq_weekly_user_weekday"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    weekday: Mapped[int] = mapped_column(Integer, nullable=False)  # 0 = Monday ... 6 = Sunday
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # off | online
+
+
+class EmployeeDayOverride(Base):
+    """One-date exception that always wins over the weekly pattern (off | online | work)."""
+
+    __tablename__ = "employee_day_overrides"
+    __table_args__ = (UniqueConstraint("user_id", "day", name="uq_override_user_day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    day: Mapped[date_type] = mapped_column(Date, nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class AttendanceRecord(Base):

@@ -47,6 +47,7 @@ class EmployeeDay:
     punches: int
     department: str | None = None
     department_id: int | None = None
+    day_type: str = "work"  # work | off | online (from the employee's schedule)
 
     @property
     def attended(self) -> bool:
@@ -69,14 +70,23 @@ class EmployeeRangeSummary:
     per_day: dict[date, EmployeeDay] = field(default_factory=dict)
     department: str | None = None
     department_id: int | None = None
+    days_off: int = 0  # scheduled days off that were NOT worked
+    days_online: int = 0  # scheduled online days without a punch (credited as attended)
+
+    @property
+    def days_expected(self) -> int:
+        """Days the employee was expected: the range minus days off (a worked day off still counts)."""
+        return max(0, self.days_total - self.days_off)
 
     @property
     def days_absent(self) -> int:
-        return self.days_total - self.days_present
+        return max(0, self.days_expected - self.days_present - self.days_online)
 
     @property
     def attendance_rate(self) -> float:
-        return self.days_present / self.days_total if self.days_total else 0.0
+        if not self.days_expected:
+            return 0.0
+        return min(1.0, (self.days_present + self.days_online) / self.days_expected)
 
     @property
     def avg_hours_per_attended_day(self) -> float:
@@ -95,7 +105,16 @@ class DailyReport:
 
     @property
     def absent(self) -> list[EmployeeDay]:
-        return [e for e in self.employees if not e.attended]
+        """No punch on a normal working day. Days off and online days are not absences."""
+        return [e for e in self.employees if not e.attended and e.day_type == "work"]
+
+    @property
+    def off(self) -> list[EmployeeDay]:
+        return [e for e in self.employees if not e.attended and e.day_type == "off"]
+
+    @property
+    def online(self) -> list[EmployeeDay]:
+        return [e for e in self.employees if not e.attended and e.day_type == "online"]
 
     @property
     def total_hours(self) -> float:
@@ -149,7 +168,23 @@ def range_window(from_date: date, to_date: date, day_start_hour: int) -> tuple[d
     return start, start + timedelta(days=days_total)
 
 
-def _employee_day(e: Employee, punches: list[datetime]) -> EmployeeDay:
+DAY_TYPES = ("work", "off", "online")
+
+
+def resolve_day_type(d: date, weekly: dict[int, str] | None, overrides: dict[date, str] | None) -> str:
+    """Schedule for one date: a per-date override always wins over the weekly pattern.
+
+    weekly    : {weekday (0 = Monday): "off" | "online"}
+    overrides : {date: "off" | "online" | "work"}   ("work" cancels a recurring day off)
+    """
+    if overrides and d in overrides:
+        return overrides[d]
+    if weekly:
+        return weekly.get(d.weekday(), "work")
+    return "work"
+
+
+def _employee_day(e: Employee, punches: list[datetime], day_type: str = "work") -> EmployeeDay:
     sorted_p = sorted(punches)
     return EmployeeDay(
         user_id=e.user_id,
@@ -159,6 +194,7 @@ def _employee_day(e: Employee, punches: list[datetime]) -> EmployeeDay:
         punches=len(sorted_p),
         department=e.department,
         department_id=e.department_id,
+        day_type=day_type,
     )
 
 
@@ -240,6 +276,7 @@ def daily_report(
     punches: Iterable[Punch],
     target_date: date,
     day_start_hour: int,
+    day_types: dict[str, str] | None = None,
 ) -> DailyReport:
     """Build the single-day report for the shift day that STARTS on `target_date`.
 
@@ -253,7 +290,10 @@ def daily_report(
         if window_start <= p.timestamp < window_end:
             by_user[str(p.user_id)].append(p.timestamp)
 
-    results = [_employee_day(e, by_user.get(e.user_id, [])) for e in employees]
+    day_types = day_types or {}
+    results = [
+        _employee_day(e, by_user.get(e.user_id, []), day_types.get(e.user_id, "work")) for e in employees
+    ]
     results.sort(key=lambda e: (not e.attended, e.name.lower()))
     return DailyReport(target_date=target_date, day_start_hour=day_start_hour, employees=results)
 
@@ -264,6 +304,7 @@ def range_report(
     from_date: date,
     to_date: date,
     day_start_hour: int,
+    day_types: dict[str, dict[date, str]] | None = None,
 ) -> RangeReport:
     """Aggregate across the INCLUSIVE [from_date, to_date] range of shift days."""
     if to_date < from_date:
@@ -281,12 +322,17 @@ def range_report(
         per_day: dict[date, EmployeeDay] = {}
         days_present = 0
         total_hours = 0.0
+        schedule = (day_types or {}).get(e.user_id, {})  # only non-"work" dates
         for d, day_punches in by_user_day.get(e.user_id, {}).items():
-            day = _employee_day(e, day_punches)
+            day = _employee_day(e, day_punches, schedule.get(d, "work"))
             per_day[d] = day
             if day.attended:
                 days_present += 1
             total_hours += day.hours_worked
+        days_off = sum(1 for d, k in schedule.items() if k == "off" and from_date <= d <= to_date and d not in per_day)
+        days_online = sum(
+            1 for d, k in schedule.items() if k == "online" and from_date <= d <= to_date and d not in per_day
+        )
         results.append(
             EmployeeRangeSummary(
                 user_id=e.user_id,
@@ -297,6 +343,8 @@ def range_report(
                 per_day=per_day,
                 department=e.department,
                 department_id=e.department_id,
+                days_off=days_off,
+                days_online=days_online,
             )
         )
 

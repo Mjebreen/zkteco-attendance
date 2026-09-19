@@ -15,7 +15,7 @@ from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session
 
 from app import rules
-from app.models import AttendanceRecord, Department, SyncState, User
+from app.models import AttendanceRecord, Department, EmployeeDayOverride, EmployeeWeeklyDay, SyncState, User
 
 log = logging.getLogger("app.service")
 
@@ -146,8 +146,14 @@ def build_daily(
     session: Session, target_date: date, day_start_hour: int, department_id: int | None = None
 ) -> rules.DailyReport:
     start, end = rules.shift_window(target_date, day_start_hour)
+    schedule = load_day_types(session, target_date, target_date)
+    day_types = {uid: days[target_date] for uid, days in schedule.items() if target_date in days}
     return rules.daily_report(
-        active_employees(session, department_id), punches_between(session, start, end), target_date, day_start_hour
+        active_employees(session, department_id),
+        punches_between(session, start, end),
+        target_date,
+        day_start_hour,
+        day_types,
     )
 
 
@@ -155,8 +161,15 @@ def build_range(
     session: Session, from_date: date, to_date: date, day_start_hour: int, department_id: int | None = None
 ) -> rules.RangeReport:
     start, end = rules.range_window(from_date, to_date, day_start_hour)
+    if to_date < from_date:
+        from_date, to_date = to_date, from_date
     return rules.range_report(
-        active_employees(session, department_id), punches_between(session, start, end), from_date, to_date, day_start_hour
+        active_employees(session, department_id),
+        punches_between(session, start, end),
+        from_date,
+        to_date,
+        day_start_hour,
+        load_day_types(session, from_date, to_date),
     )
 
 
@@ -176,15 +189,148 @@ def build_employee_history(
         )
         .order_by(AttendanceRecord.timestamp)
     )
-    rep = rules.range_report([employee], list(session.execute(stmt)), from_date, to_date, day_start_hour)
+    schedule = load_day_types(session, from_date, to_date, [employee.user_id])
+    rep = rules.range_report([employee], list(session.execute(stmt)), from_date, to_date, day_start_hour, schedule)
     per_day = rep.employees[0].per_day if rep.employees else {}
+    mine = schedule.get(employee.user_id, {})
     days: list[rules.EmployeeDay] = []
     d = from_date
     while d <= to_date:
-        days.append(per_day.get(d) or rules.EmployeeDay(employee.user_id, employee.name, None, None, 0,
-                                                        employee.department, employee.department_id))
+        days.append(
+            per_day.get(d)
+            or rules.EmployeeDay(employee.user_id, employee.name, None, None, 0, employee.department,
+                                 employee.department_id, mine.get(d, "work"))
+        )
         d = d + timedelta(days=1)
     return days
+
+
+# --------------------------------------------------------------------------- #
+# Schedules: weekly pattern + per-date overrides (system-side only)
+# --------------------------------------------------------------------------- #
+
+SCHEDULE_KINDS = ("off", "online")
+OVERRIDE_KINDS = ("off", "online", "work")
+
+
+def get_weekly_pattern(session: Session, user_id: str) -> dict[int, str]:
+    rows = session.execute(
+        select(EmployeeWeeklyDay.weekday, EmployeeWeeklyDay.kind).where(EmployeeWeeklyDay.user_id == user_id)
+    ).all()
+    return {int(wd): kind for wd, kind in rows}
+
+
+def get_overrides(session: Session, user_id: str, from_date: date, to_date: date) -> dict[date, EmployeeDayOverride]:
+    rows = session.scalars(
+        select(EmployeeDayOverride).where(
+            EmployeeDayOverride.user_id == user_id,
+            EmployeeDayOverride.day >= from_date,
+            EmployeeDayOverride.day <= to_date,
+        )
+    ).all()
+    return {o.day: o for o in rows}
+
+
+def load_day_types(
+    session: Session, from_date: date, to_date: date, user_ids: list[str] | None = None
+) -> dict[str, dict[date, str]]:
+    """{user_id: {date: "off" | "online"}} for the inclusive range. "work" days are omitted.
+
+    Weekly patterns are expanded over the range, then per-date overrides are applied on top
+    (an override of "work" removes a recurring day off).
+    """
+    if to_date < from_date:
+        from_date, to_date = to_date, from_date
+    weekly_stmt = select(EmployeeWeeklyDay.user_id, EmployeeWeeklyDay.weekday, EmployeeWeeklyDay.kind)
+    over_stmt = select(EmployeeDayOverride.user_id, EmployeeDayOverride.day, EmployeeDayOverride.kind).where(
+        EmployeeDayOverride.day >= from_date, EmployeeDayOverride.day <= to_date
+    )
+    if user_ids is not None:
+        weekly_stmt = weekly_stmt.where(EmployeeWeeklyDay.user_id.in_(user_ids))
+        over_stmt = over_stmt.where(EmployeeDayOverride.user_id.in_(user_ids))
+
+    weekly: dict[str, dict[int, str]] = {}
+    for uid, wd, kind in session.execute(weekly_stmt):
+        weekly.setdefault(uid, {})[int(wd)] = kind
+
+    out: dict[str, dict[date, str]] = {}
+    if weekly:
+        d = from_date
+        while d <= to_date:
+            wd = d.weekday()
+            for uid, pattern in weekly.items():
+                kind = pattern.get(wd)
+                if kind:
+                    out.setdefault(uid, {})[d] = kind
+            d += timedelta(days=1)
+    for uid, day, kind in session.execute(over_stmt):
+        if kind == "work":
+            out.get(uid, {}).pop(day, None)
+        else:
+            out.setdefault(uid, {})[day] = kind
+    return {uid: days for uid, days in out.items() if days}
+
+
+def set_weekly_pattern(session: Session, user_id: str, pattern: dict[int, str]) -> None:
+    """Replace the whole weekly pattern. `pattern` maps weekday (0 = Monday) -> off | online."""
+    existing = {w.weekday: w for w in session.scalars(
+        select(EmployeeWeeklyDay).where(EmployeeWeeklyDay.user_id == user_id)).all()}
+    for wd in range(7):
+        kind = pattern.get(wd)
+        row = existing.get(wd)
+        if kind in SCHEDULE_KINDS:
+            if row is None:
+                session.add(EmployeeWeeklyDay(user_id=user_id, weekday=wd, kind=kind))
+            else:
+                row.kind = kind
+        elif row is not None:
+            session.delete(row)
+    session.commit()
+
+
+def set_weekly_day_bulk(session: Session, user_ids: list[str], weekday: int, kind: str) -> int:
+    """Set (or clear, kind="work") one weekday for many employees. Returns how many were touched."""
+    if not 0 <= weekday <= 6:
+        raise ValidationError("bad_weekday")
+    existing = {w.user_id: w for w in session.scalars(
+        select(EmployeeWeeklyDay).where(EmployeeWeeklyDay.weekday == weekday,
+                                        EmployeeWeeklyDay.user_id.in_(user_ids))).all()}
+    for uid in user_ids:
+        row = existing.get(uid)
+        if kind in SCHEDULE_KINDS:
+            if row is None:
+                session.add(EmployeeWeeklyDay(user_id=uid, weekday=weekday, kind=kind))
+            else:
+                row.kind = kind
+        elif row is not None:
+            session.delete(row)
+    session.commit()
+    return len(user_ids)
+
+
+def set_day_override(session: Session, user_id: str, day: date, kind: str | None, note: str | None = None) -> None:
+    """kind: off | online | work, or None/"auto" to remove the override (fall back to the weekly pattern)."""
+    row = session.scalar(
+        select(EmployeeDayOverride).where(EmployeeDayOverride.user_id == user_id, EmployeeDayOverride.day == day)
+    )
+    if kind in OVERRIDE_KINDS:
+        note = (note or "").strip()[:255] or None
+        if row is None:
+            session.add(EmployeeDayOverride(user_id=user_id, day=day, kind=kind, note=note))
+        else:
+            row.kind, row.note = kind, note
+    elif row is not None:
+        session.delete(row)
+    session.commit()
+
+
+def move_day_off(session: Session, user_id: str, from_day: date, to_day: date, note: str | None = None) -> None:
+    """The employee works `from_day` (normally off) and takes `to_day` off instead."""
+    if from_day == to_day:
+        raise ValidationError("same_day")
+    label = (note or "").strip() or f"moved from {from_day.isoformat()}"
+    set_day_override(session, user_id, from_day, "work", f"day off moved to {to_day.isoformat()}")
+    set_day_override(session, user_id, to_day, "off", label)
 
 
 def record_count(session: Session) -> int:

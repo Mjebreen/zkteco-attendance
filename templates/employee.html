@@ -1,5 +1,46 @@
 {% extends "base.html" %}
 {% block title %}{% if employee %}{{ employee.name }} — {% endif %}{{ company }}{% endblock %}
+{% block head %}
+<style>
+  .weekly{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin-bottom:12px}
+  .weekly label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:.04em}
+  .weekly select{padding:8px 6px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-weight:600;text-transform:none;letter-spacing:0;width:100%}
+  .weekly select.k-off{background:var(--chip);color:var(--muted)}
+  .weekly select.k-online{background:var(--info-soft);color:var(--info)}
+  .calhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .calhead .month{font-size:17px;font-weight:700;min-width:150px}
+  .cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+  .cal .wd{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:650;text-align:center;padding-bottom:2px}
+  .cal button.day{all:unset;box-sizing:border-box;cursor:pointer;min-height:78px;border:1px solid var(--border);border-radius:10px;padding:7px 8px;display:flex;flex-direction:column;gap:3px;background:var(--card);position:relative;min-width:0}
+  .cal button.day:hover{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+  .cal button.day:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .cal .out{opacity:.38}
+  .cal .num{font-weight:700;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:4px}
+  .cal .tag{font-size:10.5px;font-weight:650;border-radius:5px;padding:1px 5px;align-self:flex-start;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+  .cal .meta{font-size:10.5px;color:var(--muted);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cal .s-present{background:var(--ok-soft);border-color:transparent}.cal .s-present .tag{background:var(--ok);color:#fff}
+  .cal .s-worked_off{background:var(--ok-soft);border-color:var(--warn)}.cal .s-worked_off .tag{background:var(--warn);color:#fff}
+  .cal .s-absent{background:var(--bad-soft);border-color:transparent}.cal .s-absent .tag{background:var(--bad);color:#fff}
+  .cal .s-off{background:var(--chip);border-style:dashed}.cal .s-off .tag{background:var(--faint);color:#fff}
+  .cal .s-online{background:var(--info-soft);border-color:transparent}.cal .s-online .tag{background:var(--info);color:#fff}
+  html[data-theme=dark] .cal .tag{color:#0e1319}
+  .cal .today{box-shadow:0 0 0 2px var(--accent)}
+  .cal .ovr{width:7px;height:7px;border-radius:50%;background:var(--warn);flex:none}
+  .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:12px;align-items:center}
+  .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-inline-end:5px;vertical-align:-1px}
+  dialog.daydlg{border:1px solid var(--border);border-radius:14px;background:var(--card);color:var(--text);padding:20px;width:min(420px,92vw);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+  dialog.daydlg::backdrop{background:rgba(10,15,20,.55)}
+  dialog.daydlg h3{margin:0 0 2px;font-size:17px}
+  dialog.daydlg .cur{color:var(--muted);font-size:12.5px;margin-bottom:14px}
+  dialog.daydlg .opts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+  dialog.daydlg .opts button{justify-content:center}
+  dialog.daydlg .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  dialog.daydlg input[type=text],dialog.daydlg input[type=date]{padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);flex:1;min-width:0}
+  dialog.daydlg .sec{border-top:1px solid var(--border);padding-top:12px;margin-top:4px}
+  dialog.daydlg .lbl{font-size:11.5px;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+  @media (max-width:640px){.cal{gap:3px}.cal button.day{min-height:62px;padding:5px}.cal .meta{display:none}.weekly{grid-template-columns:repeat(4,minmax(0,1fr))}}
+</style>
+{% endblock %}
 {% block content %}
 <script>document.body.setAttribute('data-target','{{ target_hours }}');</script>
 {% if not employee %}
@@ -12,10 +53,14 @@
     <div class="sub">{{ t('history') }}: {{ from_date }} → {{ to_date }} · {{ t('profile_hint') }}</div>
   </div>
   <div class="actions">
+    <a class="btn ghost" href="#schedule">{{ t('schedule') }}</a>
     <a class="btn ghost" href="/settings">{{ t('settings') }}</a>
     <a class="btn ghost" href="/?from={{ from_date }}&to={{ to_date }}">← {{ t('back_dashboard') }}</a>
   </div>
 </div>
+
+{% if msg == 'saved' %}<div class="notice ok">{{ t('saved') }}</div>
+{% elif msg and msg.startswith('err:') %}<div class="notice bad">{{ t('error') }}: {{ t(msg[4:]) }}</div>{% endif %}
 
 <form class="picker" method="get" action="/employee/{{ employee.user_id }}">
   <span class="lbl">{{ t('from') }}</span><input type="date" name="from" value="{{ from_date }}">
@@ -30,12 +75,94 @@
 </form>
 
 <div class="summary">
-  <div class="card ok"><div class="lbl">{{ t('days_present') }}</div><div class="val">{{ days_present }}<span style="font-size:16px;color:var(--faint)"> / {{ days_total }}</span></div></div>
+  <div class="card ok"><div class="lbl">{{ t('days_present') }}</div><div class="val">{{ days_present }}<span style="font-size:16px;color:var(--faint)"> / {{ days_expected }}</span></div><div class="vsub">{{ t('expected_days') }}: {{ days_expected }}</div></div>
   <div class="card bad"><div class="lbl">{{ t('days_absent') }}</div><div class="val">{{ days_absent }}</div></div>
+  {% if days_off or days_online %}<div class="card"><div class="lbl">{{ t('days_off') }} · {{ t('days_online') }}</div><div class="val">{{ days_off }}<span style="font-size:16px;color:var(--faint)"> · </span><span style="color:var(--info)">{{ days_online }}</span></div></div>{% endif %}
   <div class="card"><div class="lbl">{{ t('attendance') }}</div><div class="val">{{ (rate*100)|int }}%</div></div>
   <div class="card info"><div class="lbl">{{ t('total_hours') }}</div><div class="val">{{ total_hours|hm }}</div><div class="vsub">{{ t('avg_hrs_day') }}: {{ avg_hours|hm if days_present else '—' }}</div></div>
   <div class="card"><div class="lbl">{{ t('target_met') }}</div><div class="val">{{ target_met_days }}</div><div class="vsub">{{ t('target_hours', h=target_hours|round(1)|string|replace('.0','')) }}</div></div>
 </div>
+
+<section class="box" id="schedule">
+  <h2>{{ t('schedule') }} — {{ t('weekly_pattern') }}</h2>
+  <div class="sub" style="margin-bottom:12px">{{ t('weekly_hint') }}</div>
+  <form method="post" action="/employee/{{ employee.user_id }}/weekly">
+    <input type="hidden" name="month" value="{{ cal_month }}">
+    <div class="weekly">
+      {% for wd, label in weekday_order %}
+      {% set k = weekly_pattern.get(wd, 'work') %}
+      <label>{{ label }}
+        <select name="wd{{ wd }}" class="k-{{ k }}" onchange="this.className='k-'+this.value">
+          <option value="work" {{ 'selected' if k == 'work' else '' }}>{{ t('working_day') }}</option>
+          <option value="off" {{ 'selected' if k == 'off' else '' }}>{{ t('day_off') }}</option>
+          <option value="online" {{ 'selected' if k == 'online' else '' }}>{{ t('online_day') }}</option>
+        </select>
+      </label>
+      {% endfor %}
+    </div>
+    <button class="btn" type="submit">{{ t('save') }}</button>
+  </form>
+</section>
+
+<section class="box">
+  <h2>{{ t('calendar') }}</h2>
+  <div class="sub" style="margin-bottom:12px">{{ t('calendar_hint') }}</div>
+  <div class="calhead">
+    <a class="btn ghost sm" href="?month={{ cal_prev }}#schedule">← {{ t('prev') }}</a>
+    <span class="month">{{ cal_month_label }}</span>
+    <a class="btn ghost sm" href="?month={{ cal_next }}#schedule">{{ t('next') }} →</a>
+    <a class="btn ghost sm" href="?month={{ cal_this }}#schedule">{{ t('this_month_btn') }}</a>
+  </div>
+  <div class="cal">
+    {% for w in cal_weekdays %}<div class="wd">{{ w }}</div>{% endfor %}
+    {% for week in cal_weeks %}{% for c in week %}
+      <button type="button" class="day s-{{ c.state }}{{ ' out' if not c.in_month else '' }}{{ ' today' if c.is_today else '' }}"
+              data-day="{{ c.date.isoformat() }}" data-label="{{ fmt_date(c.date, 'long') }}" data-type="{{ c.day_type }}"
+              data-weekly="{{ c.weekly_kind }}" data-override="{{ c.override }}" data-note="{{ c.note }}">
+        <span class="num"><span>{{ c.date.day }}</span>{% if c.override %}<span class="ovr" title="{{ t('changed') }}{% if c.note %}: {{ c.note }}{% endif %}"></span>{% endif %}</span>
+        {% if c.state == 'present' %}<span class="tag">{{ c.hours or t('present') }}</span>
+        {% elif c.state == 'worked_off' %}<span class="tag">{{ t('worked_day_off') }}</span>
+        {% elif c.state == 'absent' %}<span class="tag">{{ t('absent') }}</span>
+        {% elif c.state == 'off' %}<span class="tag">{{ t('day_off') }}</span>
+        {% elif c.state == 'online' %}<span class="tag">{{ t('online_day') }}</span>{% endif %}
+        {% if c.first_in %}<span class="meta">{{ c.first_in }}{% if c.last_out %}–{{ c.last_out }}{% endif %}</span>{% endif %}
+      </button>
+    {% endfor %}{% endfor %}
+  </div>
+  <div class="legend">
+    <span><i style="background:var(--ok)"></i>{{ t('present') }}</span>
+    <span><i style="background:var(--bad)"></i>{{ t('absent') }}</span>
+    <span><i style="background:var(--faint)"></i>{{ t('day_off') }}</span>
+    <span><i style="background:var(--info)"></i>{{ t('online_day') }}</span>
+    <span><i style="background:var(--warn)"></i>{{ t('worked_day_off') }}</span>
+    <span><span class="ovr" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--warn);margin-inline-end:5px"></span>{{ t('changed') }}</span>
+  </div>
+</section>
+
+<dialog class="daydlg" id="daydlg">
+  <form method="post" action="/employee/{{ employee.user_id }}/day" id="dayform">
+    <input type="hidden" name="month" value="{{ cal_month }}">
+    <input type="hidden" name="day" id="dlg-day">
+    <h3 id="dlg-title"></h3>
+    <div class="cur" id="dlg-cur"></div>
+    <div class="lbl">{{ t('set_for_day') }}</div>
+    <div class="opts">
+      <button class="btn ghost" type="submit" name="kind" value="work">{{ t('working_day') }}</button>
+      <button class="btn ghost" type="submit" name="kind" value="off">{{ t('day_off') }}</button>
+      <button class="btn ghost" type="submit" name="kind" value="online">{{ t('online_day') }}</button>
+      <button class="btn ghost" type="submit" name="kind" value="auto">{{ t('auto_follow') }}</button>
+    </div>
+    <div class="row"><input type="text" name="note" id="dlg-note" placeholder="{{ t('note') }}" maxlength="255"></div>
+    <div class="sec" id="dlg-move">
+      <div class="lbl">{{ t('move_day_off') }}</div>
+      <div class="row">
+        <input type="date" name="move_to" id="dlg-move-to">
+        <button class="btn" type="submit" name="kind" value="move">{{ t('move') }}</button>
+      </div>
+    </div>
+    <div class="row" style="justify-content:flex-end;margin:8px 0 0"><button class="btn ghost" type="button" onclick="document.getElementById('daydlg').close()">{{ t('cancel') }}</button></div>
+  </form>
+</dialog>
 
 <section class="box">
   <h2>{{ t('history') }} <span class="right">{{ days_total }} {{ t('days') }}</span></h2>
@@ -47,10 +174,14 @@
         <td class="mono">{{ r.date.isoformat() }}{% if r.live %} <span class="pill live">{{ t('live') }}</span>{% endif %}</td>
         <td>{{ fmt_date(r.date, 'short').split(',')[0] if lang == 'en' else fmt_date(r.date, 'short').split('،')[0] }}</td>
         <td>
-          {% if not e.attended %}<span class="chip bad">{{ t('absent') }}</span>
+          {% if not e.attended %}
+            {% if e.day_type == 'off' %}<span class="chip">{{ t('day_off') }}</span>
+            {% elif e.day_type == 'online' %}<span class="chip info">{{ t('online_day') }}</span>
+            {% else %}<span class="chip bad">{{ t('absent') }}</span>{% endif %}
           {% elif r.open %}<span class="chip warn open"><span class="dot"></span>{{ t('not_checked_out') }}</span>
           {% elif e.last_out %}<span class="chip ok">{{ t('present') }}</span>
           {% else %}<span class="chip">{{ t('no_checkout') }}</span>{% endif %}
+          {% if e.attended and e.day_type == 'off' %} <span class="chip warn">{{ t('worked_day_off') }}</span>{% endif %}
           {% if r.flag == 'late' %} <span class="chip bad">{{ t('late') }}</span>{% elif r.flag == 'early' %} <span class="chip info">{{ t('early') }}</span>{% endif %}
         </td>
         <td class="mono">{{ e.first_in|hhmmss }}</td>
@@ -65,4 +196,31 @@
 </section>
 {% endif %}
 {% endblock %}
-{% block scripts %}<script>tickLive();setInterval(tickLive,30000);</script>{% endblock %}
+{% block scripts %}
+<script>
+  tickLive();setInterval(tickLive,30000);
+  (function(){
+    var dlg=document.getElementById('daydlg');if(!dlg)return;
+    var names={work:{{ t('working_day')|tojson }},off:{{ t('day_off')|tojson }},online:{{ t('online_day')|tojson }}};
+    document.querySelectorAll('.cal button.day').forEach(function(b){
+      b.addEventListener('click',function(){
+        document.getElementById('dlg-day').value=b.dataset.day;
+        document.getElementById('dlg-title').textContent=b.dataset.label;
+        var cur=names[b.dataset.type]||'';
+        if(b.dataset.override){cur+=' · '+{{ t('changed')|tojson }};}
+        else if(b.dataset.weekly!=='work'){cur+=' · '+{{ t('weekly_pattern')|tojson }};}
+        document.getElementById('dlg-cur').textContent=cur;
+        document.getElementById('dlg-note').value=b.dataset.note||'';
+        document.getElementById('dlg-move').style.display=(b.dataset.type==='off')?'':'none';
+        document.getElementById('dlg-move-to').value='';
+        if(dlg.showModal){dlg.showModal();}else{dlg.setAttribute('open','');}
+      });
+    });
+    // "move" needs a target date; other buttons must not be blocked by the empty date field
+    document.getElementById('dayform').addEventListener('submit',function(ev){
+      var k=ev.submitter&&ev.submitter.value;
+      if(k==='move'&&!document.getElementById('dlg-move-to').value){ev.preventDefault();document.getElementById('dlg-move-to').focus();}
+    });
+  })();
+</script>
+{% endblock %}

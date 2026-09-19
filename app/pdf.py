@@ -219,6 +219,17 @@ def build_daily_pdf(output_path: str, company: str, report: DailyReport, lang: s
     else:
         story.append(Paragraph(_shape(f"<i>{t(lang, 'everyone_attended')}</i>"), st["normal"]))
 
+    # Scheduled days off / online days are listed separately; they are not absences.
+    for key, group in (("online_day", report.online), ("day_off", report.off)):
+        if not group:
+            continue
+        story.append(Spacer(1, 8 * mm))
+        story.append(Paragraph(_shape(f"{t(lang, key)} ({len(group)})"), st["section"]))
+        header = [t(lang, "employee"), t(lang, "id")] + ([t(lang, "department")] if with_dept else [])
+        rows = [header] + [[e.name, e.user_id] + ([e.department or "\u2014"] if with_dept else []) for e in group]
+        widths = [85 * mm, 30 * mm, 50 * mm] if with_dept else [115 * mm, 50 * mm]
+        story.append(_table(rows, widths, _HEADER_MID, _ZEBRA, st["fonts"], rtl))
+
     _doc(output_path, f"Attendance {target_date.isoformat()}").build(story)
 
 
@@ -263,7 +274,7 @@ def build_range_pdf(output_path: str, company: str, report: RangeReport, lang: s
         for e in report.employees:
             rows.append(
                 [e.name, e.user_id] + ([e.department or "\u2014"] if with_dept else []) + [
-                    f"{e.days_present} / {e.days_total}",
+                    f"{e.days_present} / {e.days_expected}",
                     str(e.days_absent),
                     f"{int(e.attendance_rate * 100)}%",
                     format_hm(e.total_hours),
