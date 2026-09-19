@@ -89,7 +89,7 @@
     <div class="tbl"><table>
       <thead><tr>
         <th>{{ t('employee') }}</th><th>{{ t('id') }}</th>{% if departments %}<th>{{ t('department') }}</th>{% endif %}
-        <th>{{ t('attendance') }}</th><th class="num">{{ t('days_present') }}</th><th class="num">{{ t('days_absent') }}</th>{% if has_schedule %}<th class="num">{{ t('days_off') }}</th><th class="num">{{ t('days_online') }}</th>{% endif %}<th class="num">{{ t('total_hours') }}</th><th class="num">{{ t('avg_hrs_day') }}</th>
+        <th>{{ t('attendance') }}</th><th class="num">{{ t('days_present') }}</th><th class="num">{{ t('days_absent') }}</th>{% if has_schedule %}<th class="num">{{ t('days_off') }}</th><th class="num">{{ t('days_vacation') }}</th><th class="num">{{ t('days_online') }}</th>{% endif %}<th class="num">{{ t('total_hours') }}</th><th class="num">{{ t('avg_hrs_day') }}</th>
       </tr></thead>
       <tbody>
       {% for r in range_rows %}{% set e = r.e %}
@@ -100,7 +100,7 @@
           <td><span class="progress"><span class="bar {{ 'ok' if e.attendance_rate >= 0.9 else ('warn' if e.attendance_rate < 0.5 else '') }}"><div style="width:{{ e.attendance_rate|pct }}%"></div></span><span class="pct">{{ e.attendance_rate|pct }}%</span></span></td>
           <td class="num">{{ e.days_present }} / {{ e.days_expected }}</td>
           <td class="num">{{ e.days_absent }}</td>
-          {% if has_schedule %}<td class="num">{{ e.days_off or '—' }}</td><td class="num">{{ e.days_online or '—' }}</td>{% endif %}
+          {% if has_schedule %}<td class="num">{{ e.days_off or '—' }}</td><td class="num">{{ e.days_vacation or '—' }}</td><td class="num">{{ e.days_online or '—' }}</td>{% endif %}
           <td class="num">{{ e.total_hours|hm }}</td>
           <td class="num">{% if e.days_present %}{{ e.avg_hours_per_attended_day|hm }} {% if r.met %}<span class="chip ok" title="{{ t('target_met') }}">✓</span>{% endif %}{% else %}—{% endif %}</td>
         </tr>
@@ -119,6 +119,7 @@
     {% if live %}<div class="card warn"><div class="lbl">{{ t('currently_in') }}</div><div class="val">{{ currently_in }}</div><div class="vsub">{{ t('not_checked_out') }}</div></div>{% endif %}
     <div class="card bad"><div class="lbl">{{ t('absent') }}</div><div class="val">{{ absent }}</div></div>
     {% if online_count %}<div class="card info"><div class="lbl">{{ t('online_day') }}</div><div class="val">{{ online_count }}</div></div>{% endif %}
+    {% if vacation_count %}<div class="card vac"><div class="lbl">{{ t('vacation') }}</div><div class="val">{{ vacation_count }}</div></div>{% endif %}
     {% if off_count %}<div class="card"><div class="lbl">{{ t('day_off') }}</div><div class="val">{{ off_count }}</div></div>{% endif %}
     <div class="card info"><div class="lbl">{{ t('total_hours') }}</div><div class="val">{{ total_hours }}</div></div>
   </div>
@@ -127,9 +128,9 @@
   <section class="box">
     <h2>{{ t('by_department') }}</h2>
     <div class="tbl"><table>
-      <thead><tr><th>{{ t('department') }}</th><th class="num">{{ t('total_employees') }}</th><th class="num">{{ t('present') }}</th>{% if live %}<th class="num">{{ t('currently_in') }}</th>{% endif %}<th class="num">{{ t('absent') }}</th>{% if off_count or online_count %}<th class="num">{{ t('day_off') }} / {{ t('online_day') }}</th>{% endif %}<th>{{ t('attendance') }}</th><th class="num">{{ t('total_hours') }}</th></tr></thead>
+      <thead><tr><th>{{ t('department') }}</th><th class="num">{{ t('total_employees') }}</th><th class="num">{{ t('present') }}</th>{% if live %}<th class="num">{{ t('currently_in') }}</th>{% endif %}<th class="num">{{ t('absent') }}</th>{% if off_count or online_count or vacation_count %}<th class="num">{{ t('day_off') }} / {{ t('vacation') }} / {{ t('online_day') }}</th>{% endif %}<th>{{ t('attendance') }}</th><th class="num">{{ t('total_hours') }}</th></tr></thead>
       <tbody>{% for g in dept_breakdown %}
-        <tr><td class="name">{{ g.name }}</td><td class="num">{{ g.total }}</td><td class="num">{{ g.present }}</td>{% if live %}<td class="num">{{ g.open }}</td>{% endif %}<td class="num">{{ g.absent }}</td>{% if off_count or online_count %}<td class="num">{{ g.off }} / {{ g.online }}</td>{% endif %}
+        <tr><td class="name">{{ g.name }}</td><td class="num">{{ g.total }}</td><td class="num">{{ g.present }}</td>{% if live %}<td class="num">{{ g.open }}</td>{% endif %}<td class="num">{{ g.absent }}</td>{% if off_count or online_count or vacation_count %}<td class="num">{{ g.off }} / {{ g.vacation }} / {{ g.online }}</td>{% endif %}
           <td><span class="progress"><span class="bar thin {{ 'ok' if g.rate >= 0.9 else ('warn' if g.rate < 0.5 else '') }}"><div style="width:{{ (g.rate*100)|int }}%"></div></span><span class="pct">{{ (g.rate*100)|int }}%</span></span></td>
           <td class="num">{{ g.hours|hm }}</td></tr>
       {% endfor %}</tbody>
@@ -156,7 +157,7 @@
             {% elif e.last_out %}<span class="chip ok"><span class="dot"></span>{{ t('checked_out') }} {{ e.last_out|hhmm }}</span>
             {% else %}<span class="chip"><span class="dot"></span>{{ t('no_checkout') }}</span>{% endif %}
             {% if r.flag == 'late' %} <span class="chip bad">{{ t('late') }}</span>{% elif r.flag == 'early' %} <span class="chip info">{{ t('early') }}</span>{% endif %}
-            {% if e.day_type == 'off' %} <span class="chip warn">{{ t('worked_day_off') }}</span>{% elif e.day_type == 'online' %} <span class="chip info">{{ t('online_day') }}</span>{% endif %}
+            {% if e.day_type == 'off' %} <span class="chip warn">{{ t('worked_day_off') }}</span>{% elif e.day_type == 'vacation' %} <span class="chip vac">{{ t('worked_vacation') }}</span>{% elif e.day_type == 'online' %} <span class="chip info">{{ t('online_day') }}</span>{% endif %}
           </td>
           <td class="mono">{{ e.first_in|hhmmss }}</td>
           <td class="mono">{{ e.last_out|hhmmss }}</td>
@@ -200,6 +201,19 @@
     <div class="empty">{% if total %}{{ t('everyone_attended') }}{% else %}{{ t('no_employees') }}{% endif %}</div>
     {% endif %}
   </section>
+  {% if vacation_rows %}
+  <section class="box" data-searchable>
+    <h2>{{ t('vacation') }} <span class="pill vac">{{ vacation_count }}</span></h2>
+    <div class="tbl"><table>
+      <thead><tr><th>{{ t('employee') }}</th><th>{{ t('id') }}</th>{% if departments %}<th>{{ t('department') }}</th>{% endif %}</tr></thead>
+      <tbody>
+      {% for r in vacation_rows %}{% set e = r.e %}
+        <tr data-search="{{ r.search }}"><td class="name"><a href="/employee/{{ e.user_id }}">{{ e.name }}</a></td><td class="mono">{{ e.user_id }}</td>{% if departments %}<td>{% if e.department %}<span class="dept">{{ e.department }}</span>{% else %}<span class="mono">—</span>{% endif %}</td>{% endif %}</tr>
+      {% endfor %}
+      </tbody>
+    </table><div class="empty noresults hidden">{{ t('no_results') }}</div></div>
+  </section>
+  {% endif %}
   {% if off_rows %}
   <section class="box" data-searchable>
     <h2>{{ t('day_off') }} <span class="pill ">{{ off_count }}</span></h2>

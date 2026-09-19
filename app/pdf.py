@@ -220,7 +220,7 @@ def build_daily_pdf(output_path: str, company: str, report: DailyReport, lang: s
         story.append(Paragraph(_shape(f"<i>{t(lang, 'everyone_attended')}</i>"), st["normal"]))
 
     # Scheduled days off / online days are listed separately; they are not absences.
-    for key, group in (("online_day", report.online), ("day_off", report.off)):
+    for key, group in (("online_day", report.online), ("vacation", report.vacation), ("day_off", report.off)):
         if not group:
             continue
         story.append(Spacer(1, 8 * mm))

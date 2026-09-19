@@ -12,14 +12,14 @@
     :root{
       --bg:#f3f5f8;--card:#ffffff;--text:#1a2330;--muted:#66768a;--faint:#98a4b3;--border:#e4e8ee;--chip:#eef2f6;
       --accent:#0f766e;--accent-hover:#0b5f59;--accent-soft:#d9f0ec;--link:#0f766e;
-      --ok:#16a34a;--ok-soft:#dcfce7;--bad:#dc2626;--bad-soft:#fee2e2;--warn:#d97706;--warn-soft:#fef3c7;--info:#2563eb;--info-soft:#dbeafe;
+      --ok:#16a34a;--ok-soft:#dcfce7;--bad:#dc2626;--bad-soft:#fee2e2;--warn:#d97706;--warn-soft:#fef3c7;--info:#2563eb;--info-soft:#dbeafe;--vac:#7c3aed;--vac-soft:#ede9fe;
       --bar-track:#e6eaf0;--shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.08);--radius:12px;
       --font:"Segoe UI",system-ui,-apple-system,Roboto,"Noto Sans","Noto Sans Arabic",Tahoma,sans-serif;--mono:Consolas,"SF Mono",Menlo,monospace;
     }
     html[data-theme=dark]{
       --bg:#0e1319;--card:#161d26;--text:#e7ecf2;--muted:#94a2b3;--faint:#6b7887;--border:#25303d;--chip:#1f2935;
       --accent:#2dd4bf;--accent-hover:#5eead4;--accent-soft:#123a36;--link:#5eead4;
-      --ok:#4ade80;--ok-soft:#14321f;--bad:#f87171;--bad-soft:#3a1717;--warn:#fbbf24;--warn-soft:#3a2a0b;--info:#60a5fa;--info-soft:#14243d;
+      --ok:#4ade80;--ok-soft:#14321f;--bad:#f87171;--bad-soft:#3a1717;--warn:#fbbf24;--warn-soft:#3a2a0b;--info:#60a5fa;--info-soft:#14243d;--vac:#a78bfa;--vac-soft:#2a1f4a;
       --bar-track:#26313e;--shadow:none;
     }
     *,*::before,*::after{box-sizing:border-box}
@@ -79,11 +79,14 @@
     /* pills & chips */
     .pill{font-size:11px;background:var(--chip);color:var(--muted);padding:3px 9px;border-radius:99px;font-weight:650;white-space:nowrap}
     .pill.ok{background:var(--ok-soft);color:var(--ok)}.pill.bad{background:var(--bad-soft);color:var(--bad)}.pill.warn{background:var(--warn-soft);color:var(--warn)}.pill.info{background:var(--info-soft);color:var(--info)}
+    .pill.vac{background:var(--vac-soft);color:var(--vac)}
     .pill.live{background:var(--bad-soft);color:var(--bad)}
     .pill.live::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--bad);margin-inline-end:6px;vertical-align:middle;animation:pulse 1.4s infinite}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
     .chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:3px 9px;border-radius:7px;background:var(--chip);color:var(--muted);white-space:nowrap;font-weight:550}
     .chip.ok{background:var(--ok-soft);color:var(--ok)}.chip.bad{background:var(--bad-soft);color:var(--bad)}.chip.warn{background:var(--warn-soft);color:var(--warn)}.chip.info{background:var(--info-soft);color:var(--info)}
+    .chip.vac{background:var(--vac-soft);color:var(--vac)}
+    .card.vac .val{color:var(--vac)}
     .chip .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
     .chip.open .dot{animation:pulse 1.4s infinite}
     .dept{font-size:12px;color:var(--muted);background:var(--chip);padding:2px 8px;border-radius:6px;white-space:nowrap}

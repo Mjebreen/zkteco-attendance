@@ -79,6 +79,23 @@ class EmployeeDayOverride(Base):
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
+class EmployeeVacation(Base):
+    """A vacation / leave period (inclusive dates). Not an absence; excluded from expected days."""
+
+    __tablename__ = "employee_vacations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    start_day: Mapped[date_type] = mapped_column(Date, nullable=False)
+    end_day: Mapped[date_type] = mapped_column(Date, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+
+    @property
+    def days(self) -> int:
+        return (self.end_day - self.start_day).days + 1
+
+
 class AttendanceRecord(Base):
     """A raw punch. Unique on (user_id, timestamp) so re-pulling the device is idempotent."""
 

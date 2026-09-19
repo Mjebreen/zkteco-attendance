@@ -47,7 +47,7 @@ class EmployeeDay:
     punches: int
     department: str | None = None
     department_id: int | None = None
-    day_type: str = "work"  # work | off | online (from the employee's schedule)
+    day_type: str = "work"  # work | off | online | vacation (from the employee's schedule)
 
     @property
     def attended(self) -> bool:
@@ -72,11 +72,12 @@ class EmployeeRangeSummary:
     department_id: int | None = None
     days_off: int = 0  # scheduled days off that were NOT worked
     days_online: int = 0  # scheduled online days without a punch (credited as attended)
+    days_vacation: int = 0  # vacation days that were NOT worked
 
     @property
     def days_expected(self) -> int:
-        """Days the employee was expected: the range minus days off (a worked day off still counts)."""
-        return max(0, self.days_total - self.days_off)
+        """Days the employee was expected: the range minus days off and vacation (worked ones still count)."""
+        return max(0, self.days_total - self.days_off - self.days_vacation)
 
     @property
     def days_absent(self) -> int:
@@ -115,6 +116,10 @@ class DailyReport:
     @property
     def online(self) -> list[EmployeeDay]:
         return [e for e in self.employees if not e.attended and e.day_type == "online"]
+
+    @property
+    def vacation(self) -> list[EmployeeDay]:
+        return [e for e in self.employees if not e.attended and e.day_type == "vacation"]
 
     @property
     def total_hours(self) -> float:
@@ -168,7 +173,7 @@ def range_window(from_date: date, to_date: date, day_start_hour: int) -> tuple[d
     return start, start + timedelta(days=days_total)
 
 
-DAY_TYPES = ("work", "off", "online")
+DAY_TYPES = ("work", "off", "online", "vacation")
 
 
 def resolve_day_type(d: date, weekly: dict[int, str] | None, overrides: dict[date, str] | None) -> str:
@@ -333,6 +338,9 @@ def range_report(
         days_online = sum(
             1 for d, k in schedule.items() if k == "online" and from_date <= d <= to_date and d not in per_day
         )
+        days_vacation = sum(
+            1 for d, k in schedule.items() if k == "vacation" and from_date <= d <= to_date and d not in per_day
+        )
         results.append(
             EmployeeRangeSummary(
                 user_id=e.user_id,
@@ -345,6 +353,7 @@ def range_report(
                 department_id=e.department_id,
                 days_off=days_off,
                 days_online=days_online,
+                days_vacation=days_vacation,
             )
         )
 

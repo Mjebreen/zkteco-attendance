@@ -150,6 +150,7 @@ def summary(
             "absent": len(rep.absent),
             "off": len(rep.off),
             "online": len(rep.online),
+            "vacation": len(rep.vacation),
             "total_hours": round(rep.total_hours, 2),
             "total_hours_hm": format_hm(rep.total_hours),
             "employees": [
@@ -187,6 +188,7 @@ def summary(
                 "days_absent": e.days_absent,
                 "days_off": e.days_off,
                 "days_online": e.days_online,
+                "days_vacation": e.days_vacation,
                 "days_expected": e.days_expected,
                 "total_hours": round(e.total_hours, 2),
                 "total_hours_hm": format_hm(e.total_hours),

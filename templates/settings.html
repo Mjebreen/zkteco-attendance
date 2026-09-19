@@ -69,6 +69,22 @@
   </form>
 </section>
 
+<section class="box">
+  <h2>{{ t('vacation_bulk') }}</h2>
+  <div class="sub" style="margin-bottom:12px">{{ t('vacation_bulk_hint') }}</div>
+  <form class="form-inline" method="post" action="/settings/vacation-bulk{% if show_inactive %}?show_inactive=1{% endif %}">
+    <select name="scope">
+      <option value="all">{{ t('everyone') }}</option>
+      {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+      {% if departments %}<option value="none">{{ t('no_department') }}</option>{% endif %}
+    </select>
+    <span class="sub">{{ t('from') }}</span><input type="date" name="start" required style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)">
+    <span class="sub">{{ t('to') }}</span><input type="date" name="end" required style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)">
+    <input type="text" name="note" placeholder="{{ t('note') }}" maxlength="255">
+    <button class="btn" type="submit">{{ t('apply') }}</button>
+  </form>
+</section>
+
 <section class="box" data-searchable>
   <h2>{{ t('employees') }} <span class="pill">{{ users|length }}</span>
     <span class="right"><a href="/settings{% if not show_inactive %}?show_inactive=1{% endif %}">{% if show_inactive %}✓ {% endif %}{{ t('show_inactive') }}</a></span></h2>

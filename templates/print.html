@@ -146,6 +146,17 @@
         </tbody>
       </table>
       {% endif %}
+      {% if vacation_list %}
+      <h3 class="section"><span>{{ t('vacation') }}</span><span class="count">{{ vacation_list|length }} {{ t('of') }} {{ total }}</span></h3>
+      <table>
+        <thead><tr><th>{{ t('employee') }}</th><th>{{ t('id') }}</th>{% if departments %}<th>{{ t('department') }}</th>{% endif %}</tr></thead>
+        <tbody>
+        {% for e in vacation_list %}
+          <tr><td>{{ e.name }}</td><td>{{ e.user_id }}</td>{% if departments %}<td>{{ e.department or '—' }}</td>{% endif %}</tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
       {% if off_list %}
       <h3 class="section"><span>{{ t('day_off') }}</span><span class="count">{{ off_list|length }} {{ t('of') }} {{ total }}</span></h3>
       <table>

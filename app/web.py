@@ -195,7 +195,8 @@ def _dept_breakdown_day(rep: rules.DailyReport, rows: list[dict[str, Any]], no_d
     for e in rep.employees:
         key = e.department or no_dept_label
         g = groups.setdefault(
-            key, {"name": key, "total": 0, "present": 0, "absent": 0, "off": 0, "online": 0, "hours": 0.0, "open": 0}
+            key, {"name": key, "total": 0, "present": 0, "absent": 0, "off": 0, "online": 0, "vacation": 0, "hours": 0.0,
+                  "open": 0}
         )
         g["total"] += 1
         if e.attended:
@@ -207,11 +208,13 @@ def _dept_breakdown_day(rep: rules.DailyReport, rows: list[dict[str, Any]], no_d
             g["off"] += 1
         elif e.day_type == "online":
             g["online"] += 1
+        elif e.day_type == "vacation":
+            g["vacation"] += 1
         else:
             g["absent"] += 1
     out = sorted(groups.values(), key=lambda g: (g["name"] == no_dept_label, g["name"].lower()))
     for g in out:
-        expected = g["total"] - g["off"]
+        expected = g["total"] - g["off"] - g["vacation"]
         g["rate"] = min(1.0, (g["present"] + g["online"]) / expected) if expected else 0
     return out
 
@@ -292,7 +295,7 @@ def _report_context(request: Request, db: Session, settings: Settings, page: str
             ],
             dept_breakdown=_dept_breakdown_range(rep, t("no_department")),
             presence=_presence_per_day(rep),
-            has_schedule=any(e.days_off or e.days_online for e in rep.employees),
+            has_schedule=any(e.days_off or e.days_online or e.days_vacation for e in rep.employees),
             live=False,
         )
     else:
@@ -320,6 +323,9 @@ def _report_context(request: Request, db: Session, settings: Settings, page: str
             off_list=rep.off,
             online_list=rep.online,
             off_count=len(rep.off),
+            vacation_list=rep.vacation,
+            vacation_count=len(rep.vacation),
+            vacation_rows=[{"e": e, "search": f"{e.name} {e.user_id} {e.department or ''}".lower()} for e in rep.vacation],
             online_count=len(rep.online),
             present_rows=rows,
             absent_rows=[{"e": e, "search": f"{e.name} {e.user_id} {e.department or ''}".lower()} for e in rep.absent],
@@ -368,14 +374,14 @@ def export_csv(request: Request, db: Session = Depends(get_db), settings: Settin
         rep = service.build_range(db, from_date, to_date, settings.day_start_hour, dept_id)
         w.writerow(["from", "to", "employee", "id", "department", "days_present", "days_total", "days_absent",
                     "attendance_rate", "total_hours", "total_hours_hm", "avg_hours_per_attended_day",
-                    "avg_hours_hm", "days_off", "days_online", "days_expected"])
+                    "avg_hours_hm", "days_off", "days_online", "days_vacation", "days_expected"])
         for e in rep.employees:
             w.writerow([
                 from_date.isoformat(), to_date.isoformat(), e.name, e.user_id, e.department or "",
                 e.days_present, e.days_total, e.days_absent, f"{e.attendance_rate:.4f}",
                 f"{e.total_hours:.2f}", rules.format_hm(e.total_hours),
                 f"{e.avg_hours_per_attended_day:.2f}", rules.format_hm(e.avg_hours_per_attended_day),
-                e.days_off, e.days_online, e.days_expected,
+                e.days_off, e.days_online, e.days_vacation, e.days_expected,
             ])
         filename = f"attendance_{from_date:%Y-%m-%d}_to_{to_date:%Y-%m-%d}.csv"
     data = "﻿" + buf.getvalue()  # BOM so Excel opens UTF-8 (Arabic names) correctly
@@ -427,7 +433,8 @@ def employee_profile(
     present_days = sum(1 for r in rows if r["e"].attended)
     off_days = sum(1 for r in rows if not r["e"].attended and r["e"].day_type == "off")
     online_days = sum(1 for r in rows if not r["e"].attended and r["e"].day_type == "online")
-    expected_days = len(rows) - off_days
+    vacation_days = sum(1 for r in rows if not r["e"].attended and r["e"].day_type == "vacation")
+    expected_days = len(rows) - off_days - vacation_days
     total_hours = sum(r["e"].hours_worked for r in rows)
     ctx.update(_calendar_context(request, db, settings, emp, ctx["lang"]))
     ctx.update(
@@ -440,6 +447,8 @@ def employee_profile(
         days_present=present_days,
         days_off=off_days,
         days_online=online_days,
+        days_vacation=vacation_days,
+        vacations=service.list_vacations(db, emp.user_id),
         days_absent=max(0, expected_days - present_days - online_days),
         rate=min(1.0, (present_days + online_days) / expected_days) if expected_days else 0,
         total_hours=total_hours,
@@ -487,8 +496,8 @@ def _calendar_context(request: Request, db: Session, settings: Settings, emp: ru
     for d, day in zip(_daterange(grid_start, grid_end), days):
         ov = overrides.get(d)
         if day.attended:
-            state = "worked_off" if day.day_type == "off" else "present"
-        elif day.day_type in ("off", "online"):
+            state = "worked_off" if day.day_type in ("off", "vacation") else "present"
+        elif day.day_type in ("off", "online", "vacation"):
             state = day.day_type
         elif d > current:
             state = "future"
@@ -568,6 +577,62 @@ async def save_day_override(user_id: str, request: Request, db: Session = Depend
     else:
         service.set_day_override(db, user_id, day, kind if kind in service.OVERRIDE_KINDS else None, note)
     return _employee_redirect(user_id, month, "saved")
+
+
+def _form_date(value: Any) -> date | None:
+    try:
+        return datetime.strptime(str(value or ""), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+@router.post("/employee/{user_id}/vacations")
+async def add_employee_vacation(user_id: str, request: Request, db: Session = Depends(get_db)):
+    if service.get_employee(db, user_id) is None:
+        raise HTTPException(404, "employee not found")
+    form = await request.form()
+    month = str(form.get("month") or "")
+    start, end = _form_date(form.get("start")), _form_date(form.get("end") or form.get("start"))
+    if start is None or end is None:
+        return _employee_redirect(user_id, month, "err:bad_date")
+    try:
+        service.add_vacation(db, [user_id], start, end, str(form.get("note") or ""))
+    except service.ValidationError as exc:
+        return _employee_redirect(user_id, month, f"err:{exc}")
+    return _employee_redirect(user_id, month or start.strftime("%Y-%m"), "saved")
+
+
+@router.post("/employee/{user_id}/vacations/{vacation_id}/delete")
+async def delete_employee_vacation(user_id: str, vacation_id: int, request: Request, db: Session = Depends(get_db)):
+    form = await request.form()
+    if not service.delete_vacation(db, user_id, vacation_id):
+        raise HTTPException(404, "vacation not found")
+    return _employee_redirect(user_id, str(form.get("month") or ""), "deleted")
+
+
+@router.post("/settings/vacation-bulk")
+def vacation_bulk(
+    request: Request,
+    scope: str = Form("all"),
+    start: str = Form(""),
+    end: str = Form(""),
+    note: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Same vacation / public holiday for everyone or one department."""
+    users = service.list_users_admin(db, include_inactive=False)
+    if scope == "none":
+        users = [u for u in users if u.department_id is None]
+    elif scope.isdigit():
+        users = [u for u in users if u.department_id == int(scope)]
+    start_day, end_day = _form_date(start), _form_date(end or start)
+    if start_day is None or end_day is None:
+        return _settings_redirect(request, "err:bad_date")
+    try:
+        service.add_vacation(db, [u.user_id for u in users], start_day, end_day, note)
+    except service.ValidationError as exc:
+        return _settings_redirect(request, f"err:{exc}")
+    return _settings_redirect(request, "saved")
 
 
 @router.post("/settings/weekly-bulk")

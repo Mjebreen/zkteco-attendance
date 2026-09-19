@@ -15,7 +15,15 @@ from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session
 
 from app import rules
-from app.models import AttendanceRecord, Department, EmployeeDayOverride, EmployeeWeeklyDay, SyncState, User
+from app.models import (
+    AttendanceRecord,
+    Department,
+    EmployeeDayOverride,
+    EmployeeVacation,
+    EmployeeWeeklyDay,
+    SyncState,
+    User,
+)
 
 log = logging.getLogger("app.service")
 
@@ -210,7 +218,8 @@ def build_employee_history(
 # --------------------------------------------------------------------------- #
 
 SCHEDULE_KINDS = ("off", "online")
-OVERRIDE_KINDS = ("off", "online", "work")
+OVERRIDE_KINDS = ("off", "online", "work", "vacation")
+MAX_VACATION_DAYS = 366
 
 
 def get_weekly_pattern(session: Session, user_id: str) -> dict[int, str]:
@@ -263,6 +272,18 @@ def load_day_types(
                 if kind:
                     out.setdefault(uid, {})[d] = kind
             d += timedelta(days=1)
+    # Vacations sit between the weekly pattern and single-date overrides.
+    vac_stmt = select(EmployeeVacation.user_id, EmployeeVacation.start_day, EmployeeVacation.end_day).where(
+        EmployeeVacation.start_day <= to_date, EmployeeVacation.end_day >= from_date
+    )
+    if user_ids is not None:
+        vac_stmt = vac_stmt.where(EmployeeVacation.user_id.in_(user_ids))
+    for uid, start_day, end_day in session.execute(vac_stmt):
+        d = max(start_day, from_date)
+        while d <= min(end_day, to_date):
+            out.setdefault(uid, {})[d] = "vacation"
+            d += timedelta(days=1)
+
     for uid, day, kind in session.execute(over_stmt):
         if kind == "work":
             out.get(uid, {}).pop(day, None)
@@ -322,6 +343,37 @@ def set_day_override(session: Session, user_id: str, day: date, kind: str | None
     elif row is not None:
         session.delete(row)
     session.commit()
+
+
+def list_vacations(session: Session, user_id: str) -> list[EmployeeVacation]:
+    return list(
+        session.scalars(
+            select(EmployeeVacation).where(EmployeeVacation.user_id == user_id).order_by(EmployeeVacation.start_day.desc())
+        ).all()
+    )
+
+
+def add_vacation(session: Session, user_ids: list[str], start_day: date, end_day: date, note: str | None = None) -> int:
+    """Create the same vacation period for one or many employees. Returns how many were created."""
+    if end_day < start_day:
+        raise ValidationError("bad_range")
+    if (end_day - start_day).days + 1 > MAX_VACATION_DAYS:
+        raise ValidationError("range_too_long")
+    note = (note or "").strip()[:255] or None
+    for uid in user_ids:
+        session.add(EmployeeVacation(user_id=uid, start_day=start_day, end_day=end_day, note=note,
+                                     created_at=datetime.now()))
+    session.commit()
+    return len(user_ids)
+
+
+def delete_vacation(session: Session, user_id: str, vacation_id: int) -> bool:
+    row = session.get(EmployeeVacation, vacation_id)
+    if row is None or row.user_id != user_id:
+        return False
+    session.delete(row)
+    session.commit()
+    return True
 
 
 def move_day_off(session: Session, user_id: str, from_day: date, to_day: date, note: str | None = None) -> None:

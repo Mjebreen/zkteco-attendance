@@ -183,3 +183,69 @@ def test_schedule_flow_through_ui_and_reports(client):
     assert "Day off" in client.get("/print?from=2026-05-22&to=2026-05-22", auth=BASIC_AUTH).text
     csv_text = client.get("/export.csv?date=2026-05-22", auth=BASIC_AUTH).text
     assert csv_text.splitlines()[0].endswith("checkin,day_type") and ",off" in csv_text
+
+
+# ---- vacations -------------------------------------------------------------- #
+
+
+def test_vacations_priority_reports_and_ui(client, session_factory):
+    from app import service
+
+    seed(client, USERS, [{"user_id": "1", "timestamp": "2026-06-03T09:00:00"}, {"user_id": "1", "timestamp": "2026-06-03T14:00:00"}])
+    jun1, jun2, jun3, jun5, jun7 = date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3), date(2026, 6, 5), date(2026, 6, 7)
+
+    # add through the employee page: Alice on vacation 1..7 June
+    r = client.post("/employee/1/vacations", data={"start": "2026-06-01", "end": "2026-06-07", "note": "Annual leave"},
+                    auth=BASIC_AUTH, follow_redirects=False)
+    assert r.status_code == 303 and "msg=saved" in r.headers["location"] and "month=2026-06" in r.headers["location"]
+    # validation
+    r = client.post("/employee/1/vacations", data={"start": "2026-06-10", "end": "2026-06-01"}, auth=BASIC_AUTH, follow_redirects=False)
+    assert "bad_range" in r.headers["location"]
+    r = client.post("/employee/1/vacations", data={"start": "x", "end": "y"}, auth=BASIC_AUTH, follow_redirects=False)
+    assert "bad_date" in r.headers["location"]
+    assert client.post("/employee/999/vacations", data={"start": "2026-06-01", "end": "2026-06-02"}, auth=BASIC_AUTH).status_code == 404
+
+    with session_factory() as s:
+        service.set_weekly_pattern(s, "1", {4: "off"})  # Fridays off: vacation wins inside the range
+        service.set_day_override(s, "1", jun2, "work")  # single-date change wins over the vacation
+        types = service.load_day_types(s, jun1, date(2026, 6, 12))["1"]
+        assert types[jun1] == "vacation" and types[jun5] == "vacation" and types[jun7] == "vacation"
+        assert jun2 not in types and types[date(2026, 6, 12)] == "off"
+        vacs = service.list_vacations(s, "1")
+        assert len(vacs) == 1 and vacs[0].days == 7 and vacs[0].note == "Annual leave"
+        vac_id = vacs[0].id
+
+    day = client.get("/summary?date=2026-06-01", headers=API_HEADERS).json()
+    assert day["vacation"] == 1 and day["absent"] == 2
+    assert {e["id"]: e["day_type"] for e in day["employees"]}["1"] == "vacation"
+
+    # range 1..7 June: 6 vacation days (2nd is a working day -> absent), worked the 3rd during vacation
+    rng = {e["id"]: e for e in client.get("/summary?from=2026-06-01&to=2026-06-07", headers=API_HEADERS).json()["employees"]}["1"]
+    assert rng["days_vacation"] == 5 and rng["days_present"] == 1 and rng["days_expected"] == 2 and rng["days_absent"] == 1
+
+    html = client.get("/?date=2026-06-01", auth=BASIC_AUTH).text
+    assert "Vacation" in html and "pill vac" in html
+    assert "Worked during vacation" in client.get("/?date=2026-06-03", auth=BASIC_AUTH).text
+    page = client.get("/employee/1?month=2026-06", auth=BASIC_AUTH).text
+    assert "s-vacation" in page and "Annual leave" in page and 'id="vacations"' in page and 'value="vacation"' in page
+    assert "Vacation" in client.get("/print?from=2026-06-01&to=2026-06-01", auth=BASIC_AUTH).text
+    assert client.get("/report?date=2026-06-01", headers=API_HEADERS).content.startswith(b"%PDF")
+    assert "days_vacation" in client.get("/export.csv?from=2026-06-01&to=2026-06-07", auth=BASIC_AUTH).text
+
+    # one-day vacation from the calendar dialog
+    client.post("/employee/2/day", data={"day": "2026-06-01", "kind": "vacation"}, auth=BASIC_AUTH)
+    assert client.get("/summary?date=2026-06-01", headers=API_HEADERS).json()["vacation"] == 2
+
+    # bulk public holiday for everyone
+    r = client.post("/settings/vacation-bulk", data={"scope": "all", "start": "2026-06-20", "end": "2026-06-21", "note": "Holiday"},
+                    auth=BASIC_AUTH, follow_redirects=False)
+    assert "msg=saved" in r.headers["location"]
+    hol = client.get("/summary?date=2026-06-20", headers=API_HEADERS).json()
+    assert hol["vacation"] == 3 and hol["absent"] == 0
+    assert "Vacation or public holiday" in client.get("/settings", auth=BASIC_AUTH).text
+
+    # delete
+    assert client.post(f"/employee/2/vacations/{vac_id}/delete", auth=BASIC_AUTH).status_code == 404  # wrong owner
+    r = client.post(f"/employee/1/vacations/{vac_id}/delete", data={"month": "2026-06"}, auth=BASIC_AUTH, follow_redirects=False)
+    assert "msg=deleted" in r.headers["location"]
+    assert {e["id"]: e["day_type"] for e in client.get("/summary?date=2026-06-04", headers=API_HEADERS).json()["employees"]}["1"] == "work"
